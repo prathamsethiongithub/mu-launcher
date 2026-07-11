@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+
+# Build artifacts
+out/
+dist/
+release/
+
+# Electron builder
+*.exe
+*.dmg
+*.AppImage
+*.snap
+*.blockmap
+*.nupkg
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Runtime data
+.cache/
+.temp/
+*.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Hermes desktop attachments (session-specific)
+.hermes/
+
+# User data (never commit)
+worlds.json
+identity.json
+identity-tokens.bin
+auth-session.bin

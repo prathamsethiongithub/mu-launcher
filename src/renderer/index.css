@@ -1,0 +1,233 @@
+/* ════════════════════════════════════════════════════════════════════════
+   EMBER — design tokens & grammar (see DESIGN.md)
+   One flame in a dark room. No remote fonts: the launcher looks identical
+   offline. All color/motion flows from these variables.
+   ════════════════════════════════════════════════════════════════════════ */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --ground: #0b0a09;
+  --elevated: #151210;
+  --ink: #f4f1ea;
+  --dim: #9c958a;
+  --faint: #5c564e;
+  --line: rgba(244, 241, 234, 0.07);
+  --line-strong: rgba(244, 241, 234, 0.14);
+  --ember: #ffb224;
+  --ember-deep: #e38330;
+  --ok: #3ecf8e;
+  --danger: #ff5d55;
+
+  --ease-exit: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur-micro: 120ms;
+  --dur-state: 300ms;
+  --dur-scene: 600ms;
+
+  --font-display: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif;
+  --font-text: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'Cascadia Mono', 'Cascadia Code', Consolas, ui-monospace, monospace;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+  font-family: var(--font-text);
+  color: var(--ink);
+  background:
+    radial-gradient(120% 90% at 50% 110%, #171310 0%, var(--ground) 55%),
+    var(--ground);
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--line-strong); border-radius: 3px; }
+::-webkit-scrollbar-corner { background: transparent; }
+
+:focus-visible {
+  outline: 1px solid var(--line-strong);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+
+/* ── Primitives ────────────────────────────────────────────────────────── */
+
+/* Micro-label: 11px caps that whisper */
+.microlabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+/* Hairlines organize; boxes are for interaction only */
+.hairline-t { border-top: 1px solid var(--line); }
+.hairline-b { border-bottom: 1px solid var(--line); }
+
+/* Interactive surface (panels, the nav rail) */
+.surface {
+  background: color-mix(in srgb, var(--elevated) 92%, transparent);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+
+/* Deprecated alias — kept so stray usages don't visually break */
+.glass-card { background: var(--elevated); border: 1px solid var(--line); border-radius: 18px; }
+
+/* Glass: a floating translucent surface the world's light passes through.
+   Used by the nav rail — hovers above content, never blocks the atmosphere. */
+.glass {
+  background: color-mix(in srgb, var(--elevated) 52%, transparent);
+  backdrop-filter: blur(24px) saturate(140%);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  border: 1px solid var(--line);
+  box-shadow:
+    inset 0 1px 0 rgba(244, 241, 234, 0.08),
+    0 16px 40px -16px rgba(0, 0, 0, 0.65);
+}
+
+/* THE flame: the one ember action on screen */
+.pill-ember {
+  font-family: var(--font-text);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--ground);
+  background: var(--ember);
+  border: 0;
+  border-radius: 999px;
+  padding: 14px 44px;
+  cursor: pointer;
+  box-shadow: 0 0 32px rgba(255, 178, 36, 0.22), 0 1px 0 rgba(255, 255, 255, 0.25) inset;
+  transition: transform var(--dur-micro) var(--ease-exit),
+              box-shadow var(--dur-state) var(--ease-exit),
+              background var(--dur-state) var(--ease-exit);
+}
+.pill-ember:hover {
+  transform: translateY(-1px);
+  background: linear-gradient(135deg, var(--ember) 30%, var(--ember-deep) 130%);
+  box-shadow: 0 0 52px rgba(255, 178, 36, 0.34), 0 1px 0 rgba(255, 255, 255, 0.25) inset;
+}
+.pill-ember:active { transform: translateY(0) scale(0.985); }
+.pill-ember:disabled { opacity: 0.5; cursor: default; transform: none; }
+
+/* Quiet secondary action */
+.pill-ghost {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dim);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 10px 28px;
+  cursor: pointer;
+  transition: color var(--dur-micro) var(--ease-exit), border-color var(--dur-micro) var(--ease-exit);
+}
+.pill-ghost:hover { color: var(--ink); border-color: rgba(244, 241, 234, 0.28); }
+
+/* ── Scene entrance ────────────────────────────────────────────────────── */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.rise { opacity: 0; animation: rise var(--dur-scene) var(--ease-exit) forwards; }
+.d1 { animation-delay: 60ms; }
+.d2 { animation-delay: 120ms; }
+.d3 { animation-delay: 180ms; }
+.d4 { animation-delay: 240ms; }
+
+/* ── The hearth — the ONLY ambient element ─────────────────────────────── */
+@keyframes hearth-breathe {
+  from { opacity: 0.55; }
+  to   { opacity: 1; }
+}
+.hearth {
+  position: fixed;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 720px;
+  height: 220px;
+  background: radial-gradient(ellipse at bottom center, rgba(255, 178, 36, 0.05) 0%, transparent 62%);
+  pointer-events: none;
+  z-index: 0;
+  animation: hearth-breathe 9s ease-in-out infinite alternate;
+}
+
+/* ── The filament (launch progress) ────────────────────────────────────── */
+.filament-track {
+  position: relative;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: visible;
+}
+.filament-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--ember-deep), var(--ember));
+  transition: width 700ms var(--ease-exit);
+}
+@keyframes filament-head {
+  from { box-shadow: 0 0 8px rgba(255, 178, 36, 0.5); }
+  to   { box-shadow: 0 0 16px rgba(255, 178, 36, 0.85); }
+}
+.filament-head {
+  position: absolute;
+  top: 50%;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--ember);
+  transform: translate(-50%, -50%);
+  transition: left 700ms var(--ease-exit);
+  animation: filament-head 1.2s ease-in-out infinite alternate;
+}
+
+/* Breathing dot (loading) */
+@keyframes breathe {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 0.9; }
+}
+.dot-breathe { animation: breathe 2s ease-in-out infinite; }
+
+/* Live ember (running state) */
+@keyframes live-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(255, 178, 36, 0.45); }
+  100% { box-shadow: 0 0 0 8px rgba(255, 178, 36, 0); }
+}
+.dot-live {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--ember);
+  animation: live-pulse 2.2s var(--ease-exit) infinite;
+}
+
+/* Slide-over panel */
+@keyframes panel-in {
+  from { transform: translateX(24px); opacity: 0; }
+  to   { transform: translateX(0); opacity: 1; }
+}
+.panel-in { animation: panel-in 360ms var(--ease-exit) forwards; }
+
+/* ── Reduced motion: the room goes still ───────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001s !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001s !important;
+  }
+  .hearth { animation: none; opacity: 0.7; }
+  .rise { opacity: 1; animation: none; }
+}

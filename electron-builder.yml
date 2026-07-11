@@ -1,0 +1,25 @@
+appId: com.mastersunion.masterlauncher
+artifactName: ${productName}-${version}-${arch}.${ext}
+directories:
+  buildResources: build
+  output: dist
+files:
+- out/**/*
+- package.json
+nsis:
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: true
+  oneClick: false
+  perMachine: false
+  shortcutName: Master Launcher
+productName: Master Launcher
+publish:
+- owner: masters-union
+  provider: github
+  releaseType: release
+  repo: mu-master-launcher
+win:
+  icon: build/icon.ico
+  sign: false
+  target:
+  - nsis
