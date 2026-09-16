@@ -1,0 +1,52 @@
+{
+  "main_process": {
+    "src/main/index.ts": {
+      "owns": ["window lifecycle", "all ipcMain.handle registration", "resolvePlayerIdentity", "resolveLaunchAuthorization", "legacy/identity convergence + removal guard", "launchInProgress flag", "launchManager singleton"],
+      "lines": 909,
+      "status": "confirmed"
+    },
+    "src/main/auth-service.ts": { "owns": "legacy single-slot msmc session (auth-session.bin)", "lines": 428, "status": "confirmed" },
+    "src/main/identity-service.ts": { "owns": "multi-account registry (identity.json + identity-tokens.bin), skin upload", "lines": 580, "status": "confirmed" },
+    "src/main/launch-service.ts": { "owns": "LaunchManager 9-step orchestrator, MCLC invocation, isRunning/cancel", "lines": 384, "status": "confirmed" },
+    "src/main/world-manager.ts": { "owns": "worlds.json registry, per-world roots, backups/restore, metrics, health, legacy migration", "lines": 825, "status": "confirmed" },
+    "src/main/java-provisioner.ts": { "owns": "JRE provisioning from Mojang manifest, version-aware cache + smokeTest", "lines": 487, "status": "confirmed" },
+    "src/main/fabric-installer.ts": { "owns": "Fabric loader profile (validated cache, atomic writes)", "lines": 152, "status": "confirmed" },
+    "src/main/mod-installer.ts": { "owns": "mods + resourcepacks install with hash verification", "lines": 186, "status": "confirmed" },
+    "src/main/mod-data.ts": { "owns": "static generated mod manifest (~25 mods, 4 packs)", "lines": 66, "status": "confirmed" },
+    "src/main/skin-service.ts": { "owns": "skin cache (24h TTL, putCache write-through)", "lines": 154, "status": "confirmed" },
+    "src/main/server-injector.ts": { "owns": "servers.dat NBT injection, idempotent, corrupt recovery", "lines": 202, "status": "confirmed" },
+    "src/main/net.ts": { "owns": "timedFetch(30s)/downloadGuard(20s)/readWithStallGuard(60s)", "lines": 97, "status": "confirmed" },
+    "src/main/preflight-check.ts": { "owns": "disk/files/manifest preflight", "lines": 217, "status": "confirmed", "note": "IPC-exposed, never invoked by renderer" },
+    "src/main/updater.ts": { "owns": "electron-updater event forwarding", "lines": 39, "status": "confirmed" }
+  },
+  "preload": {
+    "src/preload/index.ts": { "owns": "contextBridge electronAPI: 42 invoke wrappers + 5 event pairs", "lines": 264, "status": "confirmed" },
+    "src/preload/index.d.ts": { "owns": "neutralized stub (REPORT-006)", "status": "confirmed" }
+  },
+  "renderer": {
+    "src/renderer/App.tsx": { "owns": "shell; cross-view state (launch/worlds/auth snapshot); single launch-step listener", "status": "confirmed" },
+    "src/renderer/components/PlayView.tsx": { "owns": "play stage, props-driven", "status": "confirmed" },
+    "src/renderer/components/WorldsView.tsx": { "owns": "world shelf + backup management", "status": "confirmed" },
+    "src/renderer/components/WorldSwitcher.tsx": { "owns": "popover switcher", "status": "confirmed" },
+    "src/renderer/components/NewWorldDialog.tsx": { "owns": "new world form", "status": "confirmed" },
+    "src/renderer/components/IdentityView.tsx": { "owns": "accounts + skin studio", "status": "confirmed" },
+    "src/renderer/components/SettingsView.tsx": { "owns": "read-only setup manifest of active world", "status": "confirmed" },
+    "src/renderer/components/ForgeLine.tsx": { "owns": "progress line UI", "status": "confirmed" },
+    "src/renderer/components/Layout.tsx": { "owns": "chrome layout (uses IconSidebar)", "status": "confirmed" },
+    "src/renderer/components/IconSidebar.tsx": { "owns": "primary navigation", "status": "confirmed" },
+    "src/renderer/components/AuroraBackground.tsx": { "owns": "ogl shader background", "status": "confirmed" },
+    "src/renderer/components/AuthView.tsx": { "owns": "nothing (orphaned legacy auth UI)", "status": "confirmed" },
+    "src/renderer/components/DockNav.tsx": { "owns": "nothing (superseded by IconSidebar)", "status": "confirmed" },
+    "src/renderer/components/fx/SkinViewerCanvas.tsx": { "owns": "skinview3d viewer lifecycle, stable canvas tree, rig install", "status": "confirmed" },
+    "src/renderer/components/fx/PlayerDirector.ts": { "owns": "pose/gaze/ignite state machine + STAGE_LIGHT_CONFIG/SKIN_CONFIG/IGNITE_CONFIG + installStageRig", "lines": 822, "status": "confirmed" },
+    "src/renderer/components/fx/PlayerIdentity.tsx": { "owns": "getSkin IPC bridge to canvas", "status": "confirmed" },
+    "src/renderer/components/fx/WorldBeacon.tsx": { "owns": "decorative world light", "status": "confirmed" },
+    "src/renderer/components/fx/BlurText.tsx": { "owns": "text entrance fx", "status": "confirmed" }
+  },
+  "shared": {
+    "src/shared/types.ts": { "owns": "World/Account/SkinProfile/WorldTemplate/MemoryOption/UpdateState", "status": "confirmed" },
+    "src/security/ipc-validate.ts": { "owns": "validateExternalUrl allowlist (open-external-link only)", "status": "confirmed" },
+    "src/env.d.ts": { "owns": "ambient Window.electronAPI typing (hand-maintained)", "status": "confirmed" }
+  },
+  "external_harnesses": { "location": "C:/Users/fortn/mu-verify/", "status": "outside repo, see 15-VERIFICATION" }
+}

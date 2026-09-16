@@ -92,6 +92,76 @@ function getAuthService(): AuthService {
 }
 
 /**
+ * THE synchronization bridge for Microsoft sign-in. Both entry points —
+ * Play ('auth-login') and Account ('add-microsoft-account') — converge here
+ * after a successful MSMC flow so that AuthService (the OAuth engine, single
+ * live session, auth-session.bin) and IdentityService (the account registry,
+ * identity.json + identity-tokens.bin) always describe the SAME reality.
+ *
+ * Without this, Play sign-in updated only AuthService: the Account tab kept
+ * reading an empty registry until restart, because the only import bridge
+ * was the startup-only importSession() call.
+ *
+ * Idempotent, multi-account safe: the bridge only stamps the account whose
+ * UUID matches the profile that just authenticated (dashes normalized), and
+ * only when IdentityService lacks that account's tokens. Other accounts are
+ * untouched. No tokens cross to the renderer.
+ */
+async function syncMicrosoftSignIn(profile: { uuid: string; name: string }): Promise<void> {
+  try {
+    if (!identityService) return;
+    const account = identityService
+      .getAccounts()
+      .find((a) => a.type === 'microsoft' && a.uuid && a.uuid.replace(/-/g, '') === profile.uuid.replace(/-/g, ''));
+    if (!account) return;
+    if (!identityService.getSession(account.id)) {
+      const refreshToken = getAuthService().getRefreshToken();
+      const accessToken = getAuthService().getAccessToken();
+      if (refreshToken) {
+        identityService.importSession(profile, refreshToken, accessToken || undefined);
+      }
+    }
+    // The person who just authenticated becomes the active account —
+    // mirroring the Account tab's addMicrosoftAccount behavior.
+    identityService.setActiveAccount(account.id);
+  } catch (err) {
+    // The sign-in itself succeeded; a sync failure must not reject the whole
+    // flow. Startup reconciliation retries the import on next launch.
+    console.error('[auth-sync] Microsoft sign-in sync failed:', err);
+  }
+}
+
+/**
+ * Broadcast auth/account state to the renderer after any main-process
+ * mutation that can change it (sign-in, sign-out, removal, switch, startup
+ * import). One event, one meaning: "your view may be stale — re-pull".
+ * Payload carries NO tokens. Emitted AFTER the mutation and its sync bridge
+ * complete, so a listener that immediately re-pulls reads final state —
+ * closing the race where startup import finished after the renderer already
+ * loaded an empty account list.
+ */
+function notifyAuthChanged(): void {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    const who = resolvePlayerIdentity();
+    const payload = {
+      loggedIn: !!who,
+      profile:
+        who?.source === 'identity'
+          ? { uuid: who.account.uuid || '', name: who.account.username }
+          : who
+            ? { uuid: who.profile.uuid, name: who.profile.name }
+            : null,
+      activeAccountId: identityService?.getActiveAccount()?.id ?? null,
+      accountCount: identityService?.getAccounts().length ?? 0,
+    };
+    mainWindow.webContents.send('auth-changed', payload);
+  } catch (err) {
+    console.error('[auth-sync] notifyAuthChanged failed:', err);
+  }
+}
+
+/**
  * THE one resolution rule for "who is the player": the identity system's
  * active account when it can actually play (offline, or Microsoft with a
  * live session), otherwise the legacy AuthService session.
@@ -197,9 +267,17 @@ function registerIpcHandlers(): void {
 
       // Start the login flow in the background — this opens a popup
       // BrowserWindow. Don't await it here; the renderer polls auth-status.
-      auth.login().catch((err) => {
-        console.error('Auth login failed:', err);
-      });
+      // When it succeeds, run the SAME convergence bridge as the Account
+      // tab's sign-in so the registry, active account, and every view
+      // reflect the new session without waiting for a restart.
+      auth.login()
+        .then(async (profile) => {
+          await syncMicrosoftSignIn({ uuid: profile.uuid, name: profile.name });
+          notifyAuthChanged();
+        })
+        .catch((err) => {
+          console.error('Auth login failed:', err);
+        });
 
       // Return immediately — popup handles the UI
       return { success: true };
@@ -216,6 +294,7 @@ function registerIpcHandlers(): void {
     try {
       const auth = getAuthService();
       await auth.logout();
+      notifyAuthChanged();
       return { success: true };
     } catch (err) {
       console.error('auth-logout error:', err);
@@ -328,7 +407,11 @@ function registerIpcHandlers(): void {
     launchManager.onStepChange(onStep);
 
     try {
-      await launchManager.launchWithFabric(auth, javaPath, undefined, mcRoot);
+      // Memory: the active world's own allocation (Setup → Memory), not a
+      // hardcoded default. Falls back to 4096 only if the registry value is
+      // somehow missing.
+      const maxRam = String(activeWorld.ramAllocation || 4096);
+      await launchManager.launchWithFabric(auth, javaPath, { maxRam, minRam: '1024' }, mcRoot);
       return { success: true };
     } catch (error) {
       console.error('[ipc-launch-error]', error);
@@ -458,6 +541,18 @@ function registerIpcHandlers(): void {
     return worldManager.renameWorld(worldId, newName);
   });
 
+  /**
+   * 'update-world-settings' — Update editable per-world settings (RAM
+   * allocation). The value flows to the JVM at launch ('launch-game' reads
+   * the active world's ramAllocation), so this is the real memory control.
+   */
+  ipcMain.handle('update-world-settings', async (_event, worldId: string, settings: {
+    ramAllocation?: number;
+  }) => {
+    if (!worldManager) return { success: false, error: 'World system not initialized.' };
+    return worldManager.updateWorldSettings(worldId, settings);
+  });
+
   ipcMain.handle('delete-world', async (_event, worldId: string) => {
     if (!worldManager) return { success: false, error: 'World system not initialized.' };
     return worldManager.deleteWorld(worldId);
@@ -522,22 +617,93 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('set-active-account', async (_event, accountId: string) => {
     if (!identityService) return { success: false, error: 'Identity system not initialized.' };
-    return identityService.setActiveAccount(accountId);
+    const result = identityService.setActiveAccount(accountId);
+    if (result.success) notifyAuthChanged();
+    return result;
   });
 
   ipcMain.handle('add-microsoft-account', async () => {
     if (!identityService) return { success: false, error: 'Identity system not initialized.' };
-    return identityService.addMicrosoftAccount();
+    const result = await identityService.addMicrosoftAccount();
+    // Converge the legacy AuthService onto this sign-in too — the SAME
+    // bridge, in reverse: Play, get-skin, and launch all resolve through
+    // resolvePlayerIdentity(), which reads the legacy session when no
+    // identity session exists. Without this, an Account-tab sign-in left
+    // Play showing "Almost there." until a restart re-imported the session.
+    // Same-UUID targeting only; other accounts untouched.
+    if (result.success && result.account) {
+      try {
+        const refreshToken = identityService.getRefreshToken(result.account.id);
+        const accessToken = identityService.getAccessToken(result.account.id);
+        if (refreshToken) {
+          const profile = { uuid: result.account.uuid || '', name: result.account.username };
+          await getAuthService().adoptExternalSession(profile, refreshToken, accessToken || undefined);
+        }
+      } catch (err) {
+        // The registry already holds the account; a legacy-sync failure must
+        // not fail the sign-in. ensureValidAuth() retries the refresh on the
+        // next launch attempt, and startup reconciliation re-runs import.
+        console.error('[auth-sync] Account-tab sign-in legacy sync failed:', err);
+      }
+    }
+    if (result.success) notifyAuthChanged();
+    return result;
   });
 
   ipcMain.handle('add-offline-account', async (_event, username: string) => {
     if (!identityService) return { success: false, error: 'Identity system not initialized.' };
-    return identityService.addOfflineAccount(username);
+    const result = identityService.addOfflineAccount(username);
+    if (result.success) notifyAuthChanged();
+    return result;
   });
 
+  /**
+   * 'remove-account' — Removes an account from the IdentityService registry.
+   *
+   * If the removed Microsoft account corresponds to the legacy AuthService
+   * session (same UUID), that legacy session is cleared FIRST and the clear
+   * is VERIFIED before the identity removal is allowed to report success.
+   * Ordering matters: clearing after removal would leave a window where the
+   * identity account is gone but the legacy session survives a crash — and
+   * the startup bridge (importSession) would then resurrect the account.
+   * Never touches other accounts' state.
+   */
   ipcMain.handle('remove-account', async (_event, accountId: string) => {
     if (!identityService) return { success: false, error: 'Identity system not initialized.' };
-    return identityService.removeAccount(accountId);
+
+    // Match by UUID — never by position, never by assumption. Only the
+    // account whose identity IS the legacy session clears it.
+    const account = identityService.getAccounts().find((a) => a.id === accountId);
+    if (!account) return { success: false, error: 'Account not found.' };
+
+    const isLegacySession =
+      account.type === 'microsoft' &&
+      !!account.uuid &&
+      (() => {
+        const legacy = getAuthService().getProfile();
+        return (
+          !!legacy &&
+          legacy.uuid.replace(/-/g, '') === account.uuid.replace(/-/g, '')
+        );
+      })();
+
+    // Clear-and-verify BEFORE removing: if the legacy session can't be
+    // cleared, abort with the account intact (consistent, retryable state).
+    if (isLegacySession) {
+      const auth = getAuthService();
+      await auth.logout();
+      if (auth.hasPersistedSession()) {
+        console.error('[remove-account] Legacy session file survived logout — aborting removal.');
+        return {
+          success: false,
+          error: 'Could not clear the saved sign-in session. Please try removing the account again.',
+        };
+      }
+    }
+
+    const removal = identityService.removeAccount(accountId);
+    if (removal.success) notifyAuthChanged();
+    return removal;
   });
 
   ipcMain.handle('validate-session', async (_event, accountId: string) => {
@@ -622,6 +788,7 @@ function registerIpcHandlers(): void {
         await getAuthService().logout();
       }
     }
+    if (result.success) notifyAuthChanged();
     return result;
   });
 
@@ -737,6 +904,12 @@ app.whenReady().then(() => {
   if (authProfile && authToken) {
     identityService.importSession(authProfile, authToken, authAccessToken || undefined);
   }
+
+  // Startup race guard: the window was created BEFORE IdentityService init,
+  // so the renderer may have already pulled an empty account list. Emit once
+  // now that reconciliation is final — late subscribers get coherent state
+  // without any navigation or restart.
+  notifyAuthChanged();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

@@ -94,6 +94,17 @@ const IdentityView: React.FC = () => {
   }, [accounts]);
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
+
+  // Push sync: sign-ins that originate OUTSIDE this view (Play screen,
+  // startup import) would otherwise leave the registry rendering "Sign in
+  // with Microsoft" until a manual navigation. The event carries no data —
+  // the re-pull below reads final main-process state.
+  useEffect(() => {
+    window.electronAPI.onAuthChanged(() => {
+      loadAccounts();
+    });
+    return () => window.electronAPI.removeAuthChangedListeners();
+  }, [loadAccounts]);
   useEffect(() => {
     setPendingSkin(null);
     setSkinMessage(null);
@@ -161,8 +172,11 @@ const IdentityView: React.FC = () => {
     setActionLoading(accountId);
     setConfirmRemoveId(null);
     try {
-      await window.electronAPI.removeAccount(accountId);
+      const result = await window.electronAPI.removeAccount(accountId);
+      if (!result.success) setError(result.error || 'Failed to remove account.');
       await loadAccounts();
+    } catch {
+      setError('Failed to remove account. Please try again.');
     } finally {
       setActionLoading(null);
     }
@@ -414,12 +428,14 @@ const IdentityView: React.FC = () => {
             </p>
           ) : (
             <div className="flex gap-8">
-              {/* Preview — always mounted; loading and pending overlay it */}
+              {/* Preview — always mounted; loading and pending overlay it.
+                  While the account's skin resolves the viewer stays hidden
+                  (never flash the default); resolved-null (no custom skin,
+                  offline) shows the bundled Steve via the viewer fallback. */}
               <div className="relative h-[220px] w-[150px] shrink-0">
                 <SkinViewerCanvas
-                  skinUrl={pendingSkin?.dataUrl ?? skinDataUrl}
+                  skinUrl={skinLoading && !pendingSkin ? undefined : (pendingSkin?.dataUrl ?? skinDataUrl)}
                   model={pendingSkin ? toViewerModel(pendingVariant) : skinModel}
-                  emptyLabel={skinLoading ? null : 'No skin yet'}
                 />
                 {skinLoading && (
                   <div className="absolute inset-0 flex items-center justify-center">

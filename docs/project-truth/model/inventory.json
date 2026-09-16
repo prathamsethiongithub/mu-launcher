@@ -1,0 +1,56 @@
+{
+  "audit_date": "2026-09-13",
+  "repo": {
+    "branch": "master",
+    "commits": 1,
+    "head": "b450754",
+    "head_message": "Pre-canary stable build",
+    "worktree_delta": { "files_changed": 40, "insertions": 1909, "deletions": 3566 },
+    "staged": ["src/main/mod-list.ts (deletion)"],
+    "untracked_new": [
+      "AGENT-HANDBOOK.md",
+      "FREEBUFF-LOOK-HERE.md",
+      "FREEBUFF-HANDOFF-ANIMATION-DIRECTOR.md",
+      "docs/TIMELINE.md",
+      "docs/debug/DEBUG-ARCHIVE.md",
+      "src/renderer/components/fx/BlurText.tsx",
+      "src/renderer/components/fx/PlayerDirector.ts"
+    ]
+  },
+  "stack": {
+    "electron": "^40.0.0",
+    "electron_vite": "^3.0.0",
+    "react": "^19.0.0",
+    "three": "^0.185.1",
+    "skinview3d": "^3.4.2",
+    "msmc": "^5.0.5",
+    "minecraft_launcher_core": "^3.18.2",
+    "prismarine_nbt": "^2.8.0",
+    "adm_zip": "^0.5.18",
+    "electron_updater": "^6.0.0",
+    "ogl": "^1.0.11",
+    "motion": "^12.42.2",
+    "tailwindcss_dev": "^3.4.0",
+    "typescript_dev": "^5.7.0"
+  },
+  "entry_points": {
+    "main": "src/main/index.ts",
+    "preload": "src/preload/index.ts",
+    "renderer": "src/renderer/main.tsx via src/renderer/index.html",
+    "shared": "src/shared/types.ts"
+  },
+  "load_bearing_conventions": [
+    "three dedupe aliases in electron.vite.config.ts renderer.resolve.alias (r156 nested copy must never load)",
+    "{userData} rootPath placeholder template resolution (world-manager L615-620)",
+    "normalized-UUID equivalence between legacy session and identity account",
+    "uncompressed NBT for servers.dat (MC 26.1.2 expectation)",
+    "ambient-carried color authority (palette of record, lab 001-amber-restored)"
+  ],
+  "dead_or_orphan": [
+    "src/renderer/components/AuthView.tsx",
+    "src/renderer/components/DockNav.tsx",
+    "run-preflight-check IPC (no renderer caller)",
+    "launch-poc channel (legacy POC)",
+    "server-injector.removeServer() (no caller)"
+  ]
+}

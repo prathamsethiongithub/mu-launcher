@@ -86,6 +86,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('java-progress', (_event, progress) => callback(progress));
   },
 
+  /** Removes all java-progress listeners (teardown counterpart to onJavaProgress). */
+  removeJavaProgressListeners: () => ipcRenderer.removeAllListeners('java-progress'),
+
+  /**
+   * Auth/account state changed (sign-in, sign-out, remove, switch, import).
+   * Payload carries NO tokens — just the same shape as getAuthStatus plus
+   * the resolved active identity. Listeners re-pull full state via the
+   * normal IPC calls; this event only says "your view may be stale".
+   */
+  onAuthChanged: (
+    callback: (payload: {
+      loggedIn: boolean;
+      profile: { uuid: string; name: string } | null;
+      activeAccountId: string | null;
+      accountCount: number;
+    }) => void,
+  ) => {
+    ipcRenderer.on('auth-changed', (_event, payload) => callback(payload));
+  },
+
+  /** Removes all auth-changed listeners (teardown counterpart to onAuthChanged). */
+  removeAuthChangedListeners: () => ipcRenderer.removeAllListeners('auth-changed'),
+
   /**
    * Runs launch preflight checks (internet, disk space, Java, files).
    * Returns { pass, checks } from the main process.
@@ -137,6 +160,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Rename a world. */
   renameWorld: (worldId: string, newName: string) =>
     ipcRenderer.invoke('rename-world', worldId, newName),
+
+  /** Update editable per-world settings (RAM allocation). */
+  updateWorldSettings: (worldId: string, settings: { ramAllocation?: number }) =>
+    ipcRenderer.invoke('update-world-settings', worldId, settings),
 
   /** Delete a personal world. */
   deleteWorld: (worldId: string) =>

@@ -1,9 +1,13 @@
-import React from 'react';
+import React, { useRef } from 'react';
 
 export interface LaunchStep {
   step: string;
   label: string;
   status: 'pending' | 'working' | 'done' | 'error';
+  /** Real completion fraction of this step, 0..1 — only ever set from
+   *  measured progress (Java provisioning percent, MCLC download events).
+   *  Never synthesized; absent = no measurement for this step. */
+  progress?: number;
 }
 
 interface ForgeLineProps {
@@ -23,21 +27,48 @@ function stageStatus(steps: LaunchStep[], realSteps: readonly string[]): StageSt
 }
 
 /**
+ * How far through its segment the ACTIVE stage is: the furthest measured
+ * fraction among its working steps. Unmeasured work contributes 0 — the bead
+ * enters the segment and waits for real data rather than guessing halfway.
+ */
+function stageFraction(steps: LaunchStep[], realSteps: readonly string[]): number {
+  let fraction = 0;
+  for (const s of steps) {
+    if (realSteps.includes(s.step) && s.status === 'working' && typeof s.progress === 'number') {
+      fraction = Math.max(fraction, Math.min(1, Math.max(0, s.progress)));
+    }
+  }
+  return fraction;
+}
+
+/**
  * The filament — launch progress as a single horizontal thread of light.
  * While launching, this is the screen's one ember element (the pill yields).
  * Track: hairline. Fill: ember gradient. Head: a small glowing bead.
+ *
+ * Position is TRUTH: fill is derived only from stage completions and measured
+ * progress fractions. Tempo (the head's pulse, the beacon, the character) is
+ * the separate "activity" channel — never a proxy for completion.
  */
 const ForgeLine: React.FC<ForgeLineProps> = ({ stages, launchSteps, hasLaunchedBefore }) => {
   const statuses = stages.map((s) => stageStatus(launchSteps, s.real));
   const doneCount = statuses.filter((s) => s === 'done').length;
   const activeIdx = statuses.findIndex((s) => s === 'working');
 
-  // Fill: completed stages, plus half of the active stage.
+  // Fill: completed stages plus the active stage's measured fraction.
   const unit = 100 / stages.length;
-  const fillPct = Math.min(100, doneCount * unit + (activeIdx >= 0 ? unit * 0.5 : 0));
+  const rawPct = Math.min(100, doneCount * unit + (activeIdx >= 0 ? stageFraction(launchSteps, stages[activeIdx].real) * unit : 0));
+
+  // Monotonic within a launch: progress never visibly regresses (event
+  // streams can re-emit or reorder). A fresh launch (everything pending)
+  // re-arms the clamp.
+  const maxFillRef = useRef(0);
+  if (rawPct <= 0) maxFillRef.current = 0;
+  const fillPct = Math.max(rawPct, maxFillRef.current);
+  maxFillRef.current = fillPct;
 
   return (
-    <div className="w-[340px]">
+    <div className="filament-enter w-[340px]">
       <div className="filament-track">
         {/* Arc-style memory: a faint bead where past launches began */}
         {hasLaunchedBefore && (

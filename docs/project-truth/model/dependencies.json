@@ -1,0 +1,38 @@
+{
+  "runtime_libraries": [
+    { "name": "electron", "version": "^40.0.0", "purpose": "shell", "status": "confirmed" },
+    { "name": "react/react-dom", "version": "^19.0.0", "purpose": "UI", "status": "confirmed" },
+    { "name": "msmc", "version": "^5.0.5", "purpose": "Microsoft auth -> MCLC tokens", "integration": ["auth-service", "identity-service"], "failure": "GUI errors; refresh fail -> re-login", "status": "confirmed" },
+    { "name": "minecraft-launcher-core", "version": "^3.18.2", "purpose": "downloads + JVM spawn", "integration": ["launch-service"], "failure": "120s timeout E302; spawn E303; internal downloads unbounded by net.ts", "status": "confirmed" },
+    { "name": "skinview3d", "version": "^3.4.2", "purpose": "character viewer", "integration": ["SkinViewerCanvas"], "assumption": "MUST run against root three r185 (dedupe aliases load-bearing)", "status": "confirmed" },
+    { "name": "three", "version": "^0.185.1", "purpose": "rendering", "status": "confirmed" },
+    { "name": "prismarine-nbt", "version": "^2.8.0", "purpose": "servers.dat + level.dat", "status": "confirmed" },
+    { "name": "adm-zip", "version": "^0.5.18", "purpose": "world backups", "note": "d.ts unsafe merging in lint debt", "status": "confirmed" },
+    { "name": "electron-updater", "version": "^6.0.0", "purpose": "updates", "provider": "github prathamsethiongithub/mu-launcher", "status": "confirmed" },
+    { "name": "ogl", "version": "^1.0.11", "purpose": "aurora background", "status": "confirmed" },
+    { "name": "motion", "version": "^12.42.2", "purpose": "animation primitives", "status": "confirmed" }
+  ],
+  "network_services": [
+    { "name": "Mojang Java runtime manifest", "endpoint": "launchermeta.mojang.com/v1/products/java-runtime/...all.json", "used_by": "java-provisioner", "status": "confirmed" },
+    { "name": "Mojang version metadata", "used_by": "MCLC + launch-service", "status": "confirmed" },
+    { "name": "Fabric meta", "endpoint": "meta.fabricmc.net", "used_by": "fabric-installer", "status": "confirmed" },
+    { "name": "Modrinth CDN", "endpoint": "cdn.modrinth.com", "used_by": "mod-installer", "status": "confirmed" },
+    { "name": "CurseForge CDN", "endpoint": "mediafilez.forgecdn.net", "used_by": "mod-installer", "status": "confirmed" },
+    { "name": "Minecraft services API", "endpoint": "api.minecraftservices.com", "used_by": "identity-service (skin upload), skin-service", "allowlist": "security/ipc-validate.ts", "status": "confirmed" },
+    { "name": "GitHub releases", "provider": "prathamsethiongithub/mu-launcher", "used_by": "electron-updater", "status": "confirmed" },
+    { "name": "Xbox Live / Microsoft OAuth", "used_by": "msmc internals", "status": "confirmed" }
+  ],
+  "platform_apis": [
+    { "name": "app.getPath('userData')", "purpose": "all persistence base", "status": "confirmed" },
+    { "name": "safeStorage", "purpose": "token encryption", "note": "backend machine-dependent (UNKNOWN strength)", "status": "confirmed" },
+    { "name": "child_process", "purpose": "JVM spawn, wmic", "note": "wmic deprecated on newest Windows", "status": "confirmed" },
+    { "name": "shell.openExternal", "purpose": "external links", "guard": "allowlist", "status": "confirmed" },
+    { "name": "dialog.showOpenDialog", "purpose": "skin file pick", "boundary": "path never crosses bridge", "status": "confirmed" }
+  ],
+  "fragile_assumptions": [
+    "skinview3d vs three r185 dedupe",
+    "mod-data.ts static CDN hashes rot",
+    "uncompressed NBT servers.dat",
+    "unsigned NSIS SmartScreen friction"
+  ]
+}

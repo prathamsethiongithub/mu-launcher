@@ -1,0 +1,48 @@
+{
+  "launch_pipeline": {
+    "trigger": "Play click (App.tsx)",
+    "steps": [
+      { "n": 0, "name": "renderer gate", "owner": "App.tsx", "guard": "launchingRef + isGameRunning pull" },
+      { "n": 1, "name": "main guard", "owner": "index.ts:362", "guards": ["E604 in-progress", "E605 already running"], "flag": "launchInProgress cleared in finally" },
+      { "n": 2, "name": "identity resolution", "owner": "resolvePlayerIdentity/resolveLaunchAuthorization (index.ts:165-212)", "failure": "E609 no silent fallback; null -> sign-in gate" },
+      { "n": 3, "name": "root resolution", "owner": "index.ts + launch-service", "rule": "managed={userData}/minecraft; personal=world root" },
+      { "n": 4, "name": "Preparing Java", "owner": "java-provisioner", "progress": "java-progress events", "errors": "E210-E218 bounded via net.ts" },
+      { "n": 5, "name": "Preparing Fabric", "owner": "fabric-installer", "recovery": "cache validated + atomic write" },
+      { "n": 6, "name": "Installing mods", "owner": "mod-installer", "notes": "per-item non-fatal, hash-verified" },
+      { "n": 7, "name": "Injecting MU SMP", "owner": "server-injector", "recovery": "corrupt -> .corrupt-<ts> + fresh" },
+      { "n": 8, "name": "Launching Minecraft", "owner": "MCLC via launch-service", "timeout": "120s E302", "spawn_error": "E303", "cancel": "cancel-launch -> cancel()" },
+      { "n": 9, "name": "Running", "terminal": "isRunning() true while JVM alive" }
+    ],
+    "ui_truth_map": {
+      "real": ["Running (process-based)", "typed errors", "step/percent from events"],
+      "optimistic": ["launching mirror pre-E604/E605"],
+      "lost_on_restart": ["progress narrative"],
+      "missing": ["cancel affordance in renderer", "post-exit return-to-idle flow"]
+    }
+  },
+  "auth_resolution": {
+    "rule": "identity(active offline OR live session) -> legacy isLoggedIn -> null",
+    "consumers": ["auth-status", "get-skin", "launch-game", "launch-poc"],
+    "launch_auth": "identity: ensureValidSession (throws -> E609); legacy: getAuthorizationForMCLC",
+    "no_silent_wrong_person": true
+  },
+  "remove_account_guard": {
+    "order": ["find by id", "UUID-match legacy session (normalized)", "auth.logout()", "verify hasPersistedSession()==false", "else abort with account intact", "identityService.removeAccount", "notifyAuthChanged"],
+    "source": "index.ts:655-691"
+  },
+  "animation_frame_chain": {
+    "chain": "RAF -> viewer.draw() -> viewer.animation.update() -> PlayerDirector.update(delta) -> pose mutations + light lerps -> render",
+    "damping": "dt-based 1-exp(-lambda*delta) for all light lerps (FPS independent)",
+    "gaze": "head-local demand, neck-clamped, head-only consumer, pitch negated",
+    "ignition": "ambient 2.0->2.3, camera 0.8->0.92, rim 0.6->1.1, key HELD (keyLight:1.0)",
+    "reduced_motion": "no director lights; static shot"
+  },
+  "visual_contributors": {
+    "character_hue": "SKIN_CONFIG.globalColor #d9cbb8 @2.0 ambient (dominant) + camera 0.8",
+    "depth": "key SpotLight #e6a55c @450 (~0.18 effective, decay=2)",
+    "shadow": "key.castShadow -> floor #382718 MeshStandardMaterial receiveShadow",
+    "background": "opaque black canvas + CSS room framing",
+    "yellow_shift_cause": "Stage 10 dominant #ffca8a key @~1.06 effective + crushed ambient 0.55/#3a3230 (lab 000-baseline; corrected in 001-amber-restored)",
+    "non_contributors": ["CSS atmosphere", "floor color", "shadow setup", "framing"]
+  }
+}

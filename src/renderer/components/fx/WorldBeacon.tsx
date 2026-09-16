@@ -2,31 +2,32 @@ import React, { memo, useEffect, useState } from 'react';
 import LightPillar from './LightPillar';
 
 /**
- * The world-beacon — the presence of the SMP behind the Launch button.
+ * The world-beacon — the presence of the SMP behind the player.
  *
- * A slowly turning column of ember light rising from below the horizon:
- * the world, seen from the room. It is atmosphere, never UI (DESIGN.md §8):
- * screen-blended, edge-masked, pointer-transparent, medium quality, and it
- * REACTS to the launcher's state instead of decorating it —
+ * One wrap-around amber firewall: the React Bits LightPillar (owner config,
+ * #c88735), inside a dedicated atmosphere region that WRAPS the character's
+ * opaque stage canvas — glow above the head and beside the silhouette, so
+ * the firewall reads as behind the character without ever touching a canvas
+ * pixel. It is atmosphere, never UI (DESIGN.md §8): pointer-transparent,
+ * layout-neutral, screen-blended, and masked to a soft window
+ * (.pillar-window in index.css) that dissolves into the near-black room on
+ * all four sides — clear of the header, gone before the h1/CTA.
  *
- *   distant  (signed out)  → barely there, turning slowly
- *   waiting  (ready)       → present, patient
- *   igniting (launching)   → brightens and quickens
- *   alive    (running)     → calm, steady burn
- *   receding (error)       → the world pulls back
+ * LIGHTING OWNERSHIP IS SACRED (three separate layers):
+ *   ambient character lighting → the stage canvas (untouched skin palette)
+ *   real stage spotlight       → the stage canvas (floor pool + shadow, untouched)
+ *   this firewall              → THIS layer only, strictly behind the canvas
  *
- * Honors prefers-reduced-motion by rendering nothing (the static hearth
- * remains the room's only light).
+ * The stage canvas is opaque and z-stacked above this layer (z-0 vs z-10),
+ * so the pillar physically cannot illuminate the skin, repaint the floor
+ * pool, or touch the shadow. The wrapper carries the flat page-ground color
+ * so the shader's opaque-black empty pixels screen to a no-op against it
+ * (screen(black, ground) = ground — the confined region sits entirely in
+ * the flat ground zone of the body gradient, so the wrapper is invisible
+ * by construction: no seam, no box). Honors prefers-reduced-motion by
+ * rendering nothing.
  */
 export type WorldState = 'distant' | 'waiting' | 'igniting' | 'alive' | 'receding';
-
-const TUNING: Record<WorldState, { intensity: number; rotationSpeed: number }> = {
-  distant:  { intensity: 0.35, rotationSpeed: 0.10 },
-  waiting:  { intensity: 0.60, rotationSpeed: 0.16 },
-  igniting: { intensity: 0.95, rotationSpeed: 0.38 },
-  alive:    { intensity: 0.70, rotationSpeed: 0.20 },
-  receding: { intensity: 0.22, rotationSpeed: 0.06 },
-};
 
 function usePrefersReducedMotion(): boolean {
   const [reduced, setReduced] = useState(
@@ -41,39 +42,58 @@ function usePrefersReducedMotion(): boolean {
   return reduced;
 }
 
-const WorldBeacon: React.FC<{ state: WorldState }> = ({ state }) => {
+const WorldBeacon: React.FC<{ state: WorldState }> = () => {
   const reduced = usePrefersReducedMotion();
+
   if (reduced) return null;
 
-  const { intensity, rotationSpeed } = TUNING[state];
-
+  // Beacon region — measured against the real 1280×800 Play stage
+  // (mu-verify/geo-audit.mjs, CSS px):
+  //   wrapper    x 336..944, y  75.8..451.8   (608 × 376, top 3.7% of a 752 stage)
+  //   stage cvs  x 430..850, y 179.7..451.7   (420 × 272, OPAQUE)
+  // The wrapper is the full 376px the shader was tuned against — resizing it
+  // changes the shader's aspect and warps the beam, so the wrapper's shape is
+  // fixed and the *window* (.pillar-window) does the constraining: it keeps
+  // full strength to 18% of the height (y 143) and reaches zero by 28%
+  // (y 181), i.e. just above the canvas top at 179.7. The glow's measured core
+  // is y 115..166, so the whole core survives and nothing survives to the
+  // canvas edge.
+  //
+  // Why zero at the canvas top is not optional: the stage canvas is opaque and
+  // painted the exact page ground, so a page-layer glow that is still burning
+  // where the canvas begins is cut off by a straight horizontal line across an
+  // otherwise black room — the "dark rectangle". The measured step was
+  // RGB(94,68,31) → RGB(11,10,9) at y=179.7 — a hard edge a human eye reads as
+  // a box, and the failure recorded in versions 011 through 016.
+  //
+  // No background beyond the flat page ground, no border, no shadow,
+  // z-0 under the z-10 stage — never affects layout, never takes pointer.
   return (
     <div
       aria-hidden
-      className="pointer-events-none absolute inset-0 z-0 overflow-hidden"
+      className="pointer-events-none absolute z-0 overflow-hidden"
       style={{
-        opacity: 0.9,
-        // Melt into the room: bottom-anchored cone, no hard canvas edges.
-        maskImage:
-          'radial-gradient(130% 105% at 50% 100%, black 28%, transparent 72%)',
-        WebkitMaskImage:
-          'radial-gradient(130% 105% at 50% 100%, black 28%, transparent 72%)',
-        transition: 'opacity 600ms cubic-bezier(0.22, 1, 0.36, 1)',
+        left: 'calc(50% - 304px)',
+        top: '3.7%',
+        width: '608px',
+        height: '50%',
+        backgroundColor: 'var(--ground)',
       }}
     >
       <LightPillar
-        topColor="#FFB224"
-        bottomColor="#E38330"
-        intensity={intensity}
-        rotationSpeed={rotationSpeed}
-        glowAmount={0.0012}
-        pillarWidth={3.6}
-        pillarHeight={0.5}
-        noiseIntensity={0.8}
-        pillarRotation={0}
+        topColor="#c88735"
+        bottomColor="#c88735"
+        intensity={0.75}
+        rotationSpeed={0.25}
+        glowAmount={0.001}
+        pillarWidth={2.8}
+        pillarHeight={0.3}
+        noiseIntensity={0.35}
+        pillarRotation={25}
         interactive={false}
         mixBlendMode="screen"
-        quality="medium"
+        quality="high"
+        className="pillar-window"
       />
     </div>
   );

@@ -13,6 +13,7 @@ import {
   copyFileSync,
 } from 'fs';
 import { randomUUID } from 'crypto';
+import { readdir as fspReaddir, stat as fspStat } from 'fs/promises';
 import type {
   World,
   WorldRegistry,
@@ -215,6 +216,34 @@ export class WorldManager {
   }
 
   /**
+   * Update editable per-world settings (RAM). Validates bounds and persists.
+   * Managed worlds share the machine-tuned profile — their RAM is editable
+   * too (it is machine tuning, not world identity). Returns the updated
+   * world so callers don't need a second round-trip.
+   */
+  updateWorldSettings(
+    worldId: string,
+    settings: { ramAllocation?: number }
+  ): { success: boolean; world?: World; error?: string } {
+    const world = this.registry.worlds.find((w) => w.id === worldId);
+    if (!world) return { success: false, error: 'World not found.' };
+
+    if (settings.ramAllocation !== undefined) {
+      // Prism-style bounds: 1 GB floor (below breaks modern MC), 16 GB
+      // ceiling (user machine cap per owner environment).
+      const ram = Math.round(settings.ramAllocation);
+      if (!Number.isFinite(ram) || ram < 1024 || ram > 16384) {
+        return { success: false, error: 'RAM must be between 1024 MB and 16384 MB.' };
+      }
+      world.ramAllocation = ram;
+    }
+
+    this.save();
+    console.log(`[worlds] Updated settings for world ${worldId}`);
+    return { success: true, world };
+  }
+
+  /**
    * Delete a personal world. Removes from registry AND deletes the
    * filesystem root. Managed worlds cannot be deleted.
    * If the deleted world was active, falls back to the managed world.
@@ -293,18 +322,24 @@ export class WorldManager {
   /**
    * Get storage metrics for a world.
    * Returns { worldSize, backupSize } in bytes.
+   * Async: the directory walk runs on the libuv threadpool. A previous
+   * synchronous walk blocked the main process for the entire traversal,
+   * freezing every IPC handler (auth, launch, navigation) while the window
+   * stayed visually responsive — a full launcher freeze triggered just by
+   * opening the Worlds view.
    */
-  getWorldMetrics(worldId: string): { worldSize: number; backupSize: number } {
+  async getWorldMetrics(worldId: string): Promise<{ worldSize: number; backupSize: number }> {
     const world = this.registry.worlds.find((w) => w.id === worldId);
     if (!world) return { worldSize: 0, backupSize: 0 };
 
     const root = this.resolveRoot(world);
     const backupDir = join(root, '..', 'backups');
 
-    return {
-      worldSize: this.dirSize(root),
-      backupSize: existsSync(backupDir) ? this.dirSize(backupDir) : 0,
-    };
+    const [worldSize, backupSize] = await Promise.all([
+      this.dirSize(root),
+      this.dirSize(backupDir),
+    ]);
+    return { worldSize, backupSize };
   }
 
   /**
@@ -568,22 +603,36 @@ export class WorldManager {
 
   /**
    * Recursively compute directory size in bytes.
+   * Async (fs/promises): each readdir/stat hops to the libuv threadpool, so
+   * large world trees never block the main process event loop.
    */
-  private dirSize(dirPath: string): number {
-    if (!existsSync(dirPath)) return 0;
+  private async dirSize(dirPath: string): Promise<number> {
+    let stat;
+    try {
+      stat = await fspStat(dirPath);
+    } catch {
+      return 0; // missing/unreadable root = zero size (matches old behavior)
+    }
+    if (!stat.isDirectory()) return 0;
+
+    let entries;
+    try {
+      entries = await fspReaddir(dirPath, { withFileTypes: true });
+    } catch {
+      return 0; // unreadable dir contributes nothing
+    }
+
     let total = 0;
-    const walk = (p: string) => {
-      const entries = readdirSync(p, { withFileTypes: true });
-      for (const entry of entries) {
-        const full = join(p, entry.name);
-        if (entry.isDirectory()) {
-          walk(full);
-        } else {
-          try { total += statSync(full).size; } catch { /* skip */ }
-        }
+    for (const entry of entries) {
+      const full = join(dirPath, entry.name);
+      if (entry.isDirectory()) {
+        total += await this.dirSize(full);
+      } else {
+        try {
+          total += (await fspStat(full)).size;
+        } catch { /* skip unreadable file */ }
       }
-    };
-    try { walk(dirPath); } catch { /* return what we have */ }
+    }
     return total;
   }
 

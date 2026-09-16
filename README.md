@@ -1,30 +1,20 @@
-# Master Launcher — Masters' Union SMP
+# Master Launcher
 
-![GitHub Actions Workflow Status](https://img.shields.io/github/actions/workflow/status/masters-union/mu-master-launcher/build.yml?label=Build)
-![GitHub License](https://img.shields.io/github/license/masters-union/mu-master-launcher)
+**Custom Minecraft launcher for the Masters' Union SMP. One-click join. Zero friction.**
 
-**Custom Minecraft Launcher for the Masters' Union SMP. One-click join. Zero friction.**
-
----
-
-## Features
-
-- 🔐 **Microsoft Auth** — Seamless Microsoft account sign-in
-- 🧩 **Vanilla+Fabric Profiles** — Switch between vanilla and modded profiles
-- 📦 **Auto Mod Sync** — Always up-to-date mods, no manual downloads
-- ⚙️ **Auto Config Sync** — Keybindings, settings, and preferences synced
-- 📡 **Server Status** — Live server health and player count
-- 🔄 **Self-Updating** — The launcher updates itself automatically
-- 🩺 **Smart Doctor** — Auto-detect and fix common issues
-- 🐛 **Crash Diagnostics** — Detailed crash reports with one-click sharing
+Electron + React + TypeScript desktop launcher: Microsoft auth, automatic Java provisioning, one-click Minecraft launch with Fabric, automatic mod sync, and world management for the SMP server.
 
 ---
+
+## Status
+
+**Stabilization phase.** The launcher runs end-to-end (auth → Java provisioning → Fabric install → Minecraft launch) and the core chain is runtime-proven. Remaining before release: signed installer, CI build pipeline fix, real-machine Microsoft OAuth E2E. See [`PROJECT_STATE.md`](./PROJECT_STATE.md) for the authoritative status and [`RELEASE_READINESS.md`](./RELEASE_READINESS.md) for the release gate assessment.
 
 ## Quick Start
 
 ```bash
-git clone https://github.com/masters-union/mu-master-launcher
-cd mu-master-launcher
+git clone https://github.com/prathamsethiongithub/mu-launcher
+cd mu-launcher
 npm install
 npm run dev
 ```
@@ -34,93 +24,78 @@ npm run dev
 - **Node.js 20+**
 - **Git**
 - **Windows 10/11 (x64)** — the only supported platform
-- **Java 17+** (required for running Minecraft)
+- Minecraft's Java runtime is provisioned automatically by the launcher (no manual Java install needed)
 
----
-
-## Build
+## Scripts
 
 ```bash
-# Dev server with hot reload (Vite + Electron)
-npm run dev
-
-# Production build (compile main, preload, and renderer)
-npm run build
-
-# Build + package installer (electron-builder)
-npm run build:electron
-
-# Preview production build
-npm run preview
-
-# Lint source
-npm run lint
-
-# Type-check without emitting
-npm run typecheck
+npm run dev            # dev server with hot reload (electron-vite)
+npm run build          # compile main, preload, and renderer
+npm run build:electron # build + package installer (electron-builder)
+npm run typecheck      # tsc --noEmit
+npm run lint           # eslint src/
 ```
 
-The packaged installer will be output to the `dist/` directory as an `.exe` file.
-
----
+Both `npm run typecheck` and `npm run build` must pass before any change is considered done — the build (esbuild) does NOT catch everything the typecheck does.
 
 ## Project Structure
 
 ```
-mu-master-launcher/
+mu-launcher/
 ├── src/
-│   ├── main/          # Electron main process
-│   ├── preload/       # Preload scripts
-│   ├── renderer/      # React UI
-│   ├── shared/        # Shared types
-│   └── ...
-├── .github/workflows/ # CI/CD
-├── package.json
-├── tsconfig.json
-├── electron.vite.config.ts
-├── tailwind.config.js
+│   ├── main/          # Electron main process (auth, launch, Java, mods, worlds)
+│   ├── preload/       # Preload bridge (typed IPC surface)
+│   ├── renderer/      # React UI (EMBER design system, see DESIGN.md)
+│   └── shared/        # Shared types
+├── scripts/           # Mod-list generation tooling
+├── docs/              # Debug archive
+├── .github/workflows/ # CI (lint active; build workflow trigger currently misconfigured)
 └── electron-builder.yml
 ```
 
----
-
 ## Tech Stack
 
-| Layer            | Technology                           |
-| ---------------- | ------------------------------------ |
-| Desktop Shell    | [Electron](https://www.electronjs.org/) |
-| Frontend         | [React](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) |
-| Bundler          | [electron-vite](https://electron-vite.org/) |
-| Styling          | [Tailwind CSS](https://tailwindcss.com/) |
-| Packaging        | [electron-builder](https://www.electron.build/) |
-| CI/CD            | GitHub Actions (Windows runners)     |
+| Layer         | Technology                                          |
+| ------------- | --------------------------------------------------- |
+| Desktop Shell | [Electron](https://www.electronjs.org/)             |
+| Frontend      | [React](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) |
+| Bundler       | [electron-vite](https://electron-vite.org/)         |
+| Styling       | [Tailwind CSS](https://tailwindcss.com/)            |
+| Minecraft     | [minecraft-launcher-core](https://github.com/PrismarineJS/minecraft-launcher-core) + Fabric |
+| Auth          | [MSMC](https://github.com/Hanro50/MSMC) (Microsoft) |
+| Packaging     | [electron-builder](https://www.electron.build/)     |
 
----
+## Live Configuration (as-built — matches `src/main/launch-service.ts` + `electron-builder.yml`)
 
-## Founder's Approved Configuration
+| Setting           | Value                              |
+| ----------------- | ---------------------------------- |
+| Product name      | Master Launcher                    |
+| Repository        | `prathamsethiongithub/mu-launcher` |
+| Server            | `mastersunion.minekeep.gg:25565`   |
+| Minecraft version | 26.1.2 (pinned in launch-service)  |
+| Fabric loader     | 0.19.3                             |
+| Java runtime      | Provisioned from Mojang, SHA-1 verified, version-aware cache |
+| User data         | `%APPDATA%/mu-master-launcher`     |
+| Default RAM       | 4 GB                               |
+| Auth              | MSMC (Microsoft OAuth) + multi-account IdentityService |
+| Updates           | electron-updater → GitHub Releases |
 
-| Setting               | Value                                    |
-| --------------------- | ---------------------------------------- |
-| Launcher Name         | Master Launcher                          |
-| Repository            | mu-master-launcher                       |
-| Server                | mastersunion.minekeep.gg:25565           |
-| Minecraft Version     | 1.21.5                                   |
-| Fabric Loader         | 0.19.3                                   |
-| Java Version          | 25                                       |
-| Launcher Directory    | %APPDATA%/MasterLauncher                 |
-| Default RAM           | 4 GB                                     |
-| Auth System           | MSMC (Microsoft)                         |
-| Update Channel        | GitHub Releases                          |
-| Mod Distribution      | GitHub Releases                          |
-| Release Channel       | stable                                   |
+## Documentation Map
 
----
+| Doc | What it is |
+| --- | ---------- |
+| [`PROJECT_STATE.md`](./PROJECT_STATE.md) | **Start here.** Authoritative current status, working systems, open bugs |
+| [`AGENT-HANDBOOK.md`](./AGENT-HANDBOOK.md) | Deep-dive handbook for AI agents working on this repo |
+| [`docs/TIMELINE.md`](./docs/TIMELINE.md) | Chronological history of every session and fix |
+| [`DESIGN.md`](./DESIGN.md) | EMBER design system — the UI laws (read before touching renderer UI) |
+| [`REPORT-001..008`](./) | Per-fix QA reports with evidence |
+| [`RELEASE_READINESS.md`](./RELEASE_READINESS.md) | Release gate assessment (2026-07-10 snapshot) |
+| [`FREEBUFF-LOOK-HERE.md`](./FREEBUFF-LOOK-HERE.md) | Session handoff: auth sync + launch truthfulness |
+| [`FREEBUFF-HANDOFF-ANIMATION-DIRECTOR.md`](./FREEBUFF-HANDOFF-ANIMATION-DIRECTOR.md) | Session handoff: home character animation director |
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for details on how to get involved.
-
----
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 

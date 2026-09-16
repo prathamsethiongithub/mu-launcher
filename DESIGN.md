@@ -62,7 +62,7 @@ Radii: `10px` controls · `18px` surfaces · `999px` pills. Spacing on a 4px gri
 
 **Play (the stage).** Top bar: wordmark left, `v{version}` mono right, hairline below. Center hero stack: micro-eyebrow (server identity, mono) → display word (state) → sub-line → the flame (pill / filament / live dot). Bottom: hairline-topped metadata rail — `MC 26.1.2 · FABRIC 0.19.3 · 4 GB · mastersunion.minekeep.gg` in mono. Background: ground + hearth. Nothing else glows.
 
-**Launching.** The pill yields to the **filament**: a 320px hairline track filling with the ember gradient, glowing head, current stage as the hero word, stage names as a quiet mono row beneath. The screen *is* the progress.
+**Launching.** The pill yields to the **filament**: a 320px hairline track filling with the ember gradient, glowing head, current stage as the hero word (Igniting → Forging → Launching), stage names as a quiet mono row beneath. The screen *is* the progress. The bead's **position is truth** — it advances only on measured progress (Java provisioning percent, MCLC download telemetry); a faint 44px wisp of light spills ahead of the bead along the fill's leading edge. The bead's pulse, the beacon, and the character are the **activity** channel — they quicken to say "working," never "almost done."
 
 **Account / Settings.** Same grammar, no flame unless there's a primary action (Sign in / Retry earns the ember). Settings is honest: managed values as read-only hairline rows ("Managed automatically") — no fake sliders, no Forge.
 
@@ -74,13 +74,13 @@ Radii: `10px` controls · `18px` surfaces · `999px` pills. Spacing on a 4px gri
 
 **What it is:** a slowly turning column of ember light (`fx/WorldBeacon.tsx` wrapping the vendor `fx/LightPillar.jsx`, React Bits + three.js) rising from below the horizon behind the Play pill — the SMP's presence, seen from the room.
 
-**Why it's presence and not clutter:** it *reacts* instead of decorates. One state machine, five moods:
+**Why it's presence and not clutter:** it *reacts* instead of decorates. One state machine, five moods. Mood changes are choreographed — intensity eases to its target over ~600ms, and entering *igniting* fires a one-shot catch flare (the ember catches):
 
 | Launcher state | World mood | intensity / rotation |
 |---|---|---|
 | Signed out | **distant** — barely there | 0.35 / 0.10 |
 | Ready | **waiting** — present, patient | 0.60 / 0.16 |
-| Launching | **igniting** — brightens, quickens | 0.95 / 0.38 |
+| Launching | **igniting** — flares, brightens, quickens | 1.25 / 0.90 |
 | Running | **alive** — calm steady burn | 0.70 / 0.20 |
 | Error | **receding** — the world pulls back | 0.22 / 0.06 |
 
@@ -92,7 +92,7 @@ Radii: `10px` controls · `18px` surfaces · `999px` pills. Spacing on a 4px gri
 
 ## 7 · Component inventory
 
-`Layout` (top bar + stage) · `PlayView` (hero composition) · `ForgeLine` (the filament) · `DockNav` (segmented rail) · `AuthView` · `SettingsView` · `fx/WorldBeacon` (state-reactive atmosphere; wraps vendor `fx/LightPillar.jsx`) · CSS primitives: `.pill-ember`, `.surface`, `.glass` (floating translucent rail — light passes through), `.hairline(-t)`, `.microlabel`, `.rise`, `.hearth`, `.filament-*`.
+`Layout` (top bar + stage) · `PlayView` (hero composition) · `ForgeLine` (the filament) · `DockNav` (segmented rail) · `AuthView` · `SettingsView` · `fx/WorldBeacon` (state-reactive atmosphere; wraps vendor `fx/LightPillar.jsx`) · CSS primitives: `.pill-ember`, `.surface`, `.glass` (floating translucent rail — light passes through), `.hairline(-t)`, `.microlabel`, `.rise`, `.hearth`, `.filament-*` (track/fill/head/enter + leading-edge wisp), `.beacon-catch`, `hearth.catching`.
 
 Deprecated (unused, kept on disk pending cleanup): `TelemetryPanel.tsx`, `ui/dock.tsx` (magnifying dock), `.glass-card` (aliased to surface for stragglers).
 

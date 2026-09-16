@@ -254,6 +254,25 @@ export class IdentityService {
   }
 
   /**
+   * Returns the stored refresh token for an account's session, or null.
+   * Used by the sign-in synchronization bridge (main/index.ts) so the
+   * legacy AuthService can adopt a session that originated in the
+   * Account tab. Tokens stay in the main process — never sent to the
+   * renderer.
+   */
+  getRefreshToken(accountId: string): string | null {
+    return this.encryptedTokens.get(accountId)?.refreshToken ?? null;
+  }
+
+  /**
+   * Returns the stored access token for an account's session, or null.
+   * Same consumer as getRefreshToken(); main-process only.
+   */
+  getAccessToken(accountId: string): string | null {
+    return this.encryptedTokens.get(accountId)?.accessToken ?? null;
+  }
+
+  /**
    * Validate the session for an account.
    * For Microsoft accounts: checks token expiry, refreshes if needed.
    * For offline accounts: always valid.

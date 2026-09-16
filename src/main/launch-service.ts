@@ -31,13 +31,17 @@ export class LaunchManager {
     // This covers progress, download-status, download, debug, error, and data events.
     const markActivity = () => { this._lastActivity = Date.now(); };
 
-    this.client.on('progress', (e: { type?: string; task?: string; subtask?: string; total?: number; current?: number }) => {
+    this.client.on('progress', (e: { type?: string; task?: number | string; subtask?: string; total?: number; current?: number }) => {
       markActivity();
       const step = e.type || 'unknown';
-      const progress = e.total && e.total > 0 ? Math.round((e.current || 0) / e.total * 100) : 0;
-      const taskStr = e.task || '';
-      const subStr = e.subtask || '';
-      console.log(`[mclc-progress] ${step}: ${taskStr} ${subStr} (${progress}%)`);
+      // MCLC progress events carry the completed count in `task` (a numeric
+      // counter, not a task name) and never set `current` — reading only
+      // `current` made every MCLC progress event compute 0%, freezing the
+      // renderer's download composite through the assets/classes phases.
+      // Read `current` first (any other emitter shape), then `task`.
+      const done = typeof e.current === 'number' ? e.current : Number(e.task) || 0;
+      const progress = e.total && e.total > 0 ? Math.round((done / e.total) * 100) : 0;
+      console.log(`[mclc-progress] ${step}: ${done}/${e.total ?? '?'} (${progress}%)`);
       this.emitStep(step, 'working', progress);
     });
 
@@ -61,6 +65,15 @@ export class LaunchManager {
     this.client.on('download-status', (status: { name?: string; type?: string; current?: number; total?: number }) => {
       markActivity();
       console.log(`[mclc-download] ${status.type || 'file'}: ${status.current}/${status.total} bytes`);
+      // Single large-file transfers: the byte counter IS the real fraction.
+      // Only the version jar qualifies — assets/natives/libraries stream
+      // per-file byte noise that their own task/total progress events already
+      // cover. Without this, the client-jar download (first launch) is a long
+      // silent stretch where the filament appears frozen.
+      if (status.type === 'version-jar' && status.total && status.total > 0) {
+        const pct = Math.min(100, Math.round((status.current || 0) / status.total * 100));
+        this.emitStep('version-jar', 'working', pct);
+      }
     });
 
     this.client.on('download', (name: string) => {
@@ -160,6 +173,10 @@ export class LaunchManager {
         }
       });
       this.stopWatchdog();
+
+      // Close out 'ensuring-version' once the client download inside
+      // client.launch() has resolved (see launchWithFabric note).
+      this.emitStep('ensuring-version', 'done', 45);
 
       // Save reference to the spawned process so we can kill it later
       if (result) {
@@ -283,6 +300,11 @@ export class LaunchManager {
       // client.launch() resolved — stop the watchdog and handle the process
       this.stopWatchdog();
 
+      // The Minecraft client download (assets/classes/natives streamed by MCLC
+      // under the 'launching' step) is complete. Close out 'ensuring-version'
+      // so the display can advance past Forging instead of holding it forever.
+      this.emitStep('ensuring-version', 'done', 69);
+
       if (result) {
         this._minecraftProcess = result;
         result.on('exit', () => {
@@ -328,7 +350,10 @@ export class LaunchManager {
         }
         this._minecraftProcess = null;
       }
-      this.emitStep('launching', 'done', 0);
+      // Mark the final stage FAILED, not done: a cancelled/stalled launch is
+      // over, and 'done' would render the last stage dim-complete while the
+      // UI reports failure ("complete before the operation completed").
+      this.emitStep('launching', 'error', 0);
     } catch (error) {
       console.error('[cancel-error]', error);
     }

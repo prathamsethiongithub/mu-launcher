@@ -8,18 +8,22 @@ files:
 - package.json
 nsis:
   allowToChangeInstallationDirectory: true
-  deleteAppDataOnUninstall: true
+  # Never delete userData on uninstall — it holds the player's worlds,
+  # saves, and accounts. Uninstalling the launcher must not erase them.
+  deleteAppDataOnUninstall: false
   oneClick: false
   perMachine: false
   shortcutName: Master Launcher
 productName: Master Launcher
 publish:
-- owner: masters-union
+- owner: prathamsethiongithub
   provider: github
   releaseType: release
-  repo: mu-master-launcher
+  repo: mu-launcher
+# No signing configured — v26 builds unsigned by default and skips the
+# winCodeSign toolchain download entirely (the symlink-extraction failure
+# that killed builds under v25 on machines without Developer Mode).
 win:
   icon: build/icon.ico
-  sign: false
   target:
   - nsis

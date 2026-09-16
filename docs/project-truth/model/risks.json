@@ -1,0 +1,35 @@
+{
+  "critical": [
+    { "id": "R-01", "risk": "three.js dual-copy fragility - dedupe aliases are the only guard against nested r156 reintroducing the frame-one getProgram() crash that freezes the RAF loop", "evidence": "electron.vite.config.ts:22-41", "trigger": "npm update / lockfile regen / skinview3d bump" },
+    { "id": "R-02", "risk": "no automated test suite at all - all guarantees rest on manual harness runs", "evidence": "package.json (no test script)" }
+  ],
+  "high": [
+    { "id": "R-03", "risk": "uncommitted mega-delta on single-commit master - current architecture exists only in worktree", "evidence": "Phase-0 git capture" },
+    { "id": "R-04", "risk": "mod-data.ts static CDN manifest rot - upstream deletes/moves degrade every launch (per-item non-fatal)", "evidence": "mod-data.ts, mod-installer" },
+    { "id": "R-05", "risk": "legacy auth-session.bin remains live fallback - new session-writing code without UUID convergence reopens resurrection class", "evidence": "06-AUTH; convergence only in add-microsoft-account" },
+    { "id": "R-06", "risk": "servers.dat uncompressed-NBT assumption pinned to MC 26.1.2", "evidence": "server-injector:195" },
+    { "id": "R-07", "risk": "orphaned Minecraft invisible to E605 after launcher restart - double instance possible", "evidence": "REPORT-003 limitation, still current" }
+  ],
+  "medium": [
+    { "id": "R-08", "risk": "concurrent Java provisioning possible (no in-flight guard)", "evidence": "java-provisioner" },
+    { "id": "R-09", "risk": "stale mu-verify numeric guards could certify a wrong look without recalibration", "evidence": "15-VERIFICATION, lab INDEX" },
+    { "id": "R-10", "risk": "identity.json / worlds.json lack schema versioning and explicit corruption repair", "evidence": "12-PERSISTENCE" },
+    { "id": "R-11", "risk": "launch-poc duplicate launch path drift", "evidence": "index.ts:427" },
+    { "id": "R-12", "risk": "WorldData duplicated across 5 renderer files", "evidence": "grep; REPORT-006 gap" },
+    { "id": "R-13", "risk": "env.d.ts hand-maintained surface drift (getJavaPath arity)", "evidence": "16-HISTORY #1" }
+  ],
+  "low": [
+    { "id": "R-14", "risk": "run-preflight-check orphan surface", "evidence": "index.ts:814" },
+    { "id": "R-15", "risk": "removeAllListeners teardown drops future second subscribers", "evidence": "preload:263,90" },
+    { "id": "R-16", "risk": "AuthView/DockNav dead files", "evidence": "02-FILE-MAP" },
+    { "id": "R-17", "risk": "unsigned NSIS SmartScreen friction", "evidence": "electron-builder.yml" },
+    { "id": "R-18", "risk": "wmic dependency (deprecated; orphaned file anyway)", "evidence": "preflight-check:69-72" },
+    { "id": "R-19", "risk": "skin fetch race on fast account switching (flash)", "evidence": "14-LIFECYCLE #3" }
+  ],
+  "security_boundaries": [
+    "preload bridge typed, no nodeIntegration",
+    "open-external-link allowlisted (ipc-validate.ts)",
+    "skin file paths never cross bridge (main-side staging)",
+    "safeStorage machine-keyed; strength UNKNOWN"
+  ]
+}

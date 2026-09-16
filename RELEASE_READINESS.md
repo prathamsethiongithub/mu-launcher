@@ -1,5 +1,10 @@
 # RELEASE_READINESS
 
+> **⚠️ HISTORICAL SNAPSHOT (2026-07-10).** This assessment predates the 2026-07-11
+> identity/skin sessions and the 2026-09-10/11 auth-sync + launch-truthfulness work.
+> For current status see `PROJECT_STATE.md`; for what happened since, see
+> `docs/TIMELINE.md`. Do not act on this file without checking PROJECT_STATE first.
+
 **Date:** 2026-07-10 (post Stabilization Sprint 3) · **Prepared by:** Release QA
 **Verification levels used:** `static` (code proof + tsc/build) · `runtime-harness` (real modules exercised under Node with fault injection) · `runtime-E2E` (real machine, GUI) — only the last is missing in this environment.
 

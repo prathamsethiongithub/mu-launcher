@@ -33,6 +33,18 @@ interface ElectronAPI {
 
   // Java provisioning progress
   onJavaProgress: (callback: (progress: { phase: string; percent: number; message?: string }) => void) => void;
+  removeJavaProgressListeners: () => void;
+
+  // Auth/account state change broadcast (no tokens in payload)
+  onAuthChanged: (
+    callback: (payload: {
+      loggedIn: boolean;
+      profile: { uuid: string; name: string } | null;
+      activeAccountId: string | null;
+      accountCount: number;
+    }) => void,
+  ) => void;
+  removeAuthChangedListeners: () => void;
 
   // Server injection
   injectServer: () => Promise<{ success: boolean; error?: string }>;
@@ -64,6 +76,11 @@ interface ElectronAPI {
 
   /** Rename a world. */
   renameWorld: (worldId: string, newName: string) => Promise<{ success: boolean; error?: string }>;
+  /** Update editable per-world settings (RAM allocation in MB). */
+  updateWorldSettings: (
+    worldId: string,
+    settings: { ramAllocation?: number }
+  ) => Promise<{ success: boolean; world?: World; error?: string }>;
   /** Delete a personal world. */
   deleteWorld: (worldId: string) => Promise<{ success: boolean; error?: string }>;
   /** Duplicate a world. */

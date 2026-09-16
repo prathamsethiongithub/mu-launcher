@@ -1,0 +1,23 @@
+{
+  "typed_contracts": [
+    { "name": "World", "defined": "src/shared/types.ts", "consumers": ["world-manager", "preload", "App", "PlayView", "WorldsView", "WorldSwitcher", "SettingsView"], "note": "renderer duplicates WorldData x5 (drift risk)" },
+    { "name": "Account", "defined": "src/shared/types.ts", "consumers": ["identity-service", "preload", "IdentityView"] },
+    { "name": "SkinProfile", "defined": "src/shared/types.ts", "consumers": ["skin-service", "identity-service", "IdentityView"] },
+    { "name": "WorldTemplate", "defined": "src/shared/types.ts", "consumers": ["NewWorldDialog", "world-manager"] },
+    { "name": "MemoryOption", "defined": "src/shared/types.ts", "consumers": ["NewWorldDialog", "MCLC memory"] },
+    { "name": "UpdateState", "defined": "src/shared/types.ts", "consumers": ["updater.ts", "renderer"] },
+    { "name": "Window.electronAPI", "defined": "src/env.d.ts", "consumers": ["all renderer"], "note": "hand-maintained, drift possible" }
+  ],
+  "implicit_contracts": [
+    { "id": 1, "name": "launch-step payload stability", "detail": "{step,status,progress} unordered versioning; renderer assumes order + status vocabulary" },
+    { "id": 2, "name": "javaPath precondition", "detail": "renderer must get-java-path first; main does not validate existence pre-spawn" },
+    { "id": 3, "name": "select-skin-file handshake", "detail": "staged main-side single variable; second select overwrites" },
+    { "id": 4, "name": "{userData} placeholder", "detail": "rootPath stored as template; resolved world-manager:615-620" },
+    { "id": 5, "name": "normalized UUID equivalence", "detail": "legacy<->identity matching strips dashes (index.ts:670,771)" },
+    { "id": 6, "name": "auth-status unified shape", "detail": "source: identity|legacy set by main resolution" },
+    { "id": 7, "name": "MCLC auth triple", "detail": "{access_token,uuid,name} from either auth system" },
+    { "id": 8, "name": "servers.dat uncompressed NBT", "detail": "MC 26.1.2 expectation (server-injector:195)" },
+    { "id": 9, "name": "listener teardown scope", "detail": "removeLaunchListeners uses removeAllListeners - app-scope only" },
+    { "id": 10, "name": "mod hash format dispatch", "detail": "sha512 (modrinth) / sha1 (some curseforge) per hashFormat field" }
+  ]
+}

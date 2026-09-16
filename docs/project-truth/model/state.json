@@ -1,0 +1,49 @@
+{
+  "accounts": {
+    "source_of_truth": "identity.json + identity-tokens.bin (IdentityService)",
+    "legacy_fallback": "auth-session.bin (AuthService, single slot)",
+    "classification": "PERSISTED + LEGACY-FALLBACK",
+    "resolution_rule": "index.ts:175-188 identity(active with offline type OR live session) -> legacy -> null",
+    "restart": "registry restored; active account needs live session record else legacy fallback"
+  },
+  "launch_state": {
+    "backend_truth": "launchManager singleton + launchInProgress flag + isRunning() (main, IN-MEMORY)",
+    "renderer_mirror": "App.tsx launching/launchError/launchSteps/isRunning (DERIVED from launch-step events)",
+    "persisted": "none",
+    "restart_behavior": "progress lost; isRunning reconciled on mount (App.tsx:105); orphaned game invisible to E605"
+  },
+  "progress_state": {
+    "source": "LaunchManager step list + MCLC/java events (IN-MEMORY)",
+    "renderer": "DERIVED via single launch-step listener; ForgeLine renders",
+    "aggregation": "none - step-level only"
+  },
+  "worlds": {
+    "source_of_truth": "worlds.json (WorldManager, PERSISTED)",
+    "renderer": "App worlds/activeWorld DERIVED via explicit re-fetch (no events)",
+    "active_world": "persisted activeWorldId; launch uses its root (managed={userData}/minecraft)",
+    "migration": "one-shot legacy {userData}/minecraft migration (world-manager:678-704)"
+  },
+  "skins": {
+    "source_of_truth": "Mojang profile upstream",
+    "local": "skins/ cache 24h TTL (CACHE); putCache write-through after upload",
+    "offline": "always default look, never borrows"
+  },
+  "java": {
+    "source_of_truth": "Mojang runtime manifest per MC version",
+    "cache": "runtime/current-java-path.txt + runtime/jre (PERSISTED cache, version-aware smoke test)"
+  },
+  "minecraft_config": {
+    "servers.dat": "game-owned; injector idempotent; corrupt -> .corrupt-<ts> + fresh",
+    "memory": "world registry field passed to MCLC; no options.txt writer",
+    "fabric_profile": "versions/fabric-loader-*/...json (CACHE, validated, atomic)"
+  },
+  "launcher_config": {
+    "settings": "none persisted - SettingsView is read-only manifest",
+    "view_state": "IN-MEMORY, resets to Play",
+    "update_state": "DERIVED from updater events"
+  },
+  "unknowns": [
+    "identity.json corruption fallback UX (not runtime-verified)",
+    "worlds.json corruption behavior (no repair path found)"
+  ]
+}

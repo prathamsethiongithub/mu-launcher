@@ -1,0 +1,28 @@
+{
+  "location": "C:/Users/fortn/mu-verify/ (outside repo)",
+  "shared_infra": {
+    "cdp.mjs": "raw CDP client",
+    "common.mjs": "launch ritual: real Electron, locked 1280x800, identity.json backups, teardown",
+    "visual-capture.mjs": "screenshot + live three.js params dump -> mu-visual-history/<NNN-slug>/"
+  },
+  "harnesses": [
+    { "name": "anim-diag.mjs", "claims": "RAF alive; director drives pose; ignition ramp (2 -> 2.285)", "evidence_level": "infrastructure-only" },
+    { "name": "anim-interact.mjs", "claims": "pointer gaze/wave chain", "evidence_level": "infrastructure-only, timing-sensitive" },
+    { "name": "anim-persist.mjs", "claims": "animation identity across restart", "evidence_level": "infrastructure-only" },
+    { "name": "anim-calib.mjs + calib-samples.json", "claims": "amber-chroma guard calibration (hue~34, G/R~0.72; drift >=45 / >0.80)", "evidence_level": "calibration artifact", "warning": "calibrated pre-001 framing; stale (lab INDEX flags p85 gate stale)" },
+    { "name": "anim-probe/shots/tilt/visual, animation-truth.mjs", "claims": "earlier animation forensics", "evidence_level": "HISTORICAL (superseded)" },
+    { "name": "launch-truth.mjs", "claims": "launch events observable via CDP", "evidence_level": "infrastructure-only; full download not exercised" },
+    { "name": "skin-render-diag1/2/3, skin-fallback-smoke", "claims": "skin render + fallback", "evidence_level": "HISTORICAL (REPORT-006 era)" },
+    { "name": "rig-probe.mjs", "claims": "stage rig params live", "evidence_level": "infrastructure-only" },
+    { "name": "flow3/5/6, smoke-launch, launch-ui-smoke, worlds-fix-check", "claims": "earlier E2E smokes", "evidence_level": "HISTORICAL" },
+    { "name": "visual-capture runs 000-baseline / 001-amber-restored", "claims": "real-app visual state per experiment", "evidence_level": "user-facing (screenshots, owner-arbitrated)" }
+  ],
+  "false_positive_risks": ["numeric guards calibrated on past look pass wrong-but-similar images", "focus/timing flakes"],
+  "in_repo_verification": {
+    "test_script": null,
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src/",
+    "note": "no automated test suite exists; all runtime verification is harness-based and manual"
+  },
+  "key_lesson": "green diagnostics passed during the yellow-shift regression; only lab screenshots caught it - diagnostics prove machinery, not look"
+}

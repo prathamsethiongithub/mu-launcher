@@ -78,6 +78,7 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
   const [expandedBackupsId, setExpandedBackupsId] = useState<string | null>(null);
   const [backupsList, setBackupsList] = useState<{ name: string; date: number; size: number }[]>([]);
   const [restoringBackup, setRestoringBackup] = useState<string | null>(null);
+  const [deletingBackup, setDeletingBackup] = useState<string | null>(null);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -228,6 +229,7 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
       loadMetrics();
     } finally {
       setActionLoading(null);
+      setDeletingBackup(null);
     }
   };
 
@@ -495,6 +497,27 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
                               Cancel
                             </button>
                           </div>
+                        ) : deletingBackup === backup.name ? (
+                          /* Inline confirm — same grammar as the world-delete
+                             confirmation above. A backup IS the user's rollback;
+                             deleting one is irreversible and was the only
+                             destructive action in the app without a confirm. */
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] text-dim">Delete this backup?</span>
+                            <button
+                              onClick={() => handleDeleteBackup(world.id, backup.name)}
+                              disabled={isLoading}
+                              className="rounded-full bg-danger/10 px-2.5 py-1 text-[10px] font-medium text-danger transition-colors hover:bg-danger/20"
+                            >
+                              Delete
+                            </button>
+                            <button
+                              onClick={() => setDeletingBackup(null)}
+                              className="text-[10px] text-faint hover:text-dim"
+                            >
+                              Cancel
+                            </button>
+                          </div>
                         ) : isDeletingThisBackup ? (
                           <span className="text-[10px] text-faint">Deleting…</span>
                         ) : (
@@ -507,7 +530,7 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
                               Restore
                             </button>
                             <button
-                              onClick={() => handleDeleteBackup(world.id, backup.name)}
+                              onClick={() => setDeletingBackup(backup.name)}
                               disabled={isLoading}
                               className="rounded-full px-2 py-1 text-[10px] text-faint transition-colors hover:text-danger hover:bg-danger/[0.04] disabled:opacity-30"
                               aria-label="Delete backup"

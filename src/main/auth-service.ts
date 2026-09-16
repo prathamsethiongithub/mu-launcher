@@ -133,6 +133,44 @@ export class AuthService {
   }
 
   /**
+   * Adopts a session that was created OUTSIDE this service — e.g. the
+   * Account tab's IdentityService sign-in — as the legacy launch session.
+   * This is the reverse half of the sign-in synchronization bridge: after
+   * an Account-tab sign-in, the legacy session (which Play, get-skin, and
+   * launch resolution read via resolvePlayerIdentity) must name the SAME
+   * account, or Play keeps showing "Almost there." until restart.
+   *
+   * Replaces any prior session (that session's owner already lost the
+   * single legacy slot; their IdentityService record and tokens are
+   * untouched and stay switchable) and persists through the existing
+   * safeStorage format — no new token flows are invented. After this,
+   * state mirrors a restoreSession()-style cold start: profile in memory,
+   * refresh token saved, currentToken null until ensureValidAuth()
+   * reconstructs the Xbox chain on the next launch.
+   */
+  async adoptExternalSession(
+    profile: { uuid: string; name: string },
+    refreshToken: string,
+    accessToken?: string,
+  ): Promise<void> {
+    // Drop any prior session first — clearSession() removes the old
+    // persisted auth-session.bin so the new persistSession() starts clean.
+    this.currentToken = null;
+    this.currentProfile = null;
+    this.savedRefreshToken = null;
+    this.clearSession();
+
+    this.currentProfile = {
+      uuid: profile.uuid,
+      name: profile.name,
+      accessToken: accessToken || '',
+    };
+    this.savedRefreshToken = refreshToken;
+    await this.persistSession();
+    console.log('[auth] Adopted external session for', profile.name);
+  }
+
+  /**
    * Returns the current authenticated profile.
    */
   getProfile(): AuthProfile | null {
@@ -370,6 +408,21 @@ export class AuthService {
       }
     } catch (err) {
       console.error('[auth] Failed to clear session:', err);
+    }
+  }
+
+  /**
+   * Returns true only if the legacy persisted session file still exists.
+   * Used after clearSession() during account removal to verify the legacy
+   * session was actually cleared — without this, a failed unlink would
+   * look like success and the startup bridge would resurrect the removed
+   * account on the next launch.
+   */
+  hasPersistedSession(): boolean {
+    try {
+      return existsSync(this.getSessionFilePath());
+    } catch {
+      return false;
     }
   }
 }
