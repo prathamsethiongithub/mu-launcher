@@ -85,7 +85,7 @@ const SERVER_HOST = 'mastersunion.minekeep.gg';
  * (which would cost the grounding). Do not raise HERO_CANVAS past ~352 without
  * deciding which of those the composition should accept.
  */
-const HERO_SLOT = 'clamp(220px, 43.5vh, 420px)';
+const HERO_SLOT = 'clamp(200px, 38vh, 380px)';
 /**
  * 52vh = 416px at 1280x800 — the RENDER FRAME, deliberately larger than the
  * slot the document reserves (348px). The canvas is absolutely positioned, so
@@ -106,7 +106,7 @@ const HERO_SLOT = 'clamp(220px, 43.5vh, 420px)';
  * to stay exactly where they are, and §6 defines this fix as a larger render
  * frame, so only HERO_CANVAS grows.
  */
-const HERO_CANVAS = 'clamp(300px, 52vh, 500px)';
+const HERO_CANVAS = 'clamp(280px, 46vh, 460px)';
 
 const EMBER_KEY = 'mu-launcher-embers';
 function getEmberCount(): number {
@@ -440,8 +440,12 @@ const PlayView: React.FC<PlayViewProps> = ({
           ) : launchError ? (
             <button className="pill-ember" onClick={onRetry}>Try again</button>
           ) : (
-            <button className="pill-ember" onClick={handlePlay}>
-              {isLoggedIn ? 'Enter the world' : 'Sign in'}
+            <button
+              className="cta-image-btn"
+              onClick={handlePlay}
+              aria-label={isLoggedIn ? 'Enter the world' : 'Sign in'}
+            >
+              <img src={new URL('../assets/enter-world-btn.png', import.meta.url).href} alt="" />
             </button>
           )}
         </div>

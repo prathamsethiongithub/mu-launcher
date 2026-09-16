@@ -283,7 +283,7 @@ export const STAGE_LIGHT_CONFIG = {
   // HERO_CANVAS grew 366 → 416 px in the same pass, the character's on-screen
   // height is preserved (≈39-40% of the viewport) while the head finally gains
   // dark space above it. Nothing else in this file changed.
-  stageZoom: 0.70,      // 024: render frame > character, so the canvas edge is off-subject
+  stageZoom: 0.62,      // 046vh canvas (368px @800): character rescaled to fit the shorter frame, feet fully in frame
   stageLift: 4.5,       // playerWrapper.position.y — feet clear the frame bottom
   stageFloorY: -11.5,   // stage floor AT the LIFTED feet (stageLift − 16) — planted, never floating
   floorSize: 168,       // floor plane is 168×168 — sized to the radial fade (see below)

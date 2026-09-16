@@ -118,6 +118,36 @@ body {
 .pill-ember:active { transform: translateY(0) scale(0.985); }
 .pill-ember:disabled { opacity: 0.5; cursor: default; transform: none; }
 
+/* CTA as image button — custom art replaces the pill. The image is inlined
+   in the DOM via <img> (src resolved with import.meta.url in PlayView.tsx),
+   so it renders at its natural aspect ratio with no dead zones. */
+.cta-image-btn {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-top: 12px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  line-height: 0;
+  width: fit-content;
+  height: fit-content;
+  transition: transform 0.15s ease, filter 0.15s ease;
+}
+.cta-image-btn img {
+  width: clamp(280px, 30vw, 400px);
+  height: auto;
+  display: block;
+  pointer-events: none;
+}
+.cta-image-btn:hover {
+  transform: scale(1.03);
+  filter: brightness(1.1) drop-shadow(0 0 8px rgba(230, 165, 92, 0.4));
+}
+.cta-image-btn:active {
+  transform: scale(0.98);
+}
+
 /* Quiet secondary action */
 .pill-ghost {
   font-size: 13px;
