@@ -81,23 +81,37 @@ const NewWorldDialog: React.FC<NewWorldDialogProps> = ({ onClose, onCreated }) =
 
   const loadFabric = async () => {
     setFabricFailed(false);
-    const result = await window.electronAPI.fetchVersionList('fabric');
-    if (result.success && result.versions) {
-      setFabricVersions(result.versions);
-      setLoaderVersion((prev) => prev || result.versions![0] || '');
-    } else {
-      console.error('Fabric fetch failed:', result.error);
+    console.log('[dialog] calling fetchVersionList fabric...');
+    try {
+      const result = await window.electronAPI.fetchVersionList('fabric');
+      console.log('[dialog] fabric result:', JSON.stringify(result).slice(0, 200));
+      if (result.success && result.versions) {
+        setFabricVersions(result.versions);
+        setLoaderVersion((prev) => prev || result.versions![0] || '');
+      } else {
+        console.error('[dialog] fabric error:', result.error);
+        setFabricFailed(true);
+      }
+    } catch (err) {
+      console.error('[dialog] fabric error:', err);
       setFabricFailed(true);
     }
   };
 
   const loadQuilt = async () => {
     setQuiltFailed(false);
-    const result = await window.electronAPI.fetchVersionList('quilt');
-    if (result.success && result.versions) {
-      setQuiltVersions(result.versions);
-    } else {
-      console.error('Quilt fetch failed:', result.error);
+    console.log('[dialog] calling fetchVersionList quilt...');
+    try {
+      const result = await window.electronAPI.fetchVersionList('quilt');
+      console.log('[dialog] quilt result:', JSON.stringify(result).slice(0, 200));
+      if (result.success && result.versions) {
+        setQuiltVersions(result.versions);
+      } else {
+        console.error('[dialog] quilt error:', result.error);
+        setQuiltFailed(true);
+      }
+    } catch (err) {
+      console.error('[dialog] quilt error:', err);
       setQuiltFailed(true);
     }
   };

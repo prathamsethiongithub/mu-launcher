@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, dialog, net } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
 import { join } from 'path';
 import { readFileSync, statSync } from 'fs';
 import { is } from '@electron-toolkit/utils';
@@ -70,6 +70,22 @@ function createWindow(): void {
       shell.openExternal(url);
     }
   });
+
+  // DEV ONLY: relay renderer console output into the main process terminal so
+  // diagnostic logs ([dialog]/[version-list]) are visible without opening DevTools.
+  if (is.dev) {
+    mainWindow.webContents.on(
+      'console-message',
+      // Param types deliberately `unknown`: the EventEmitter's deprecated overloads
+      // win overload resolution, so we narrow the (new) details shape at runtime.
+      (_event: unknown, details: unknown) => {
+        const d = details as { level?: string; message?: string };
+        const msg = typeof d?.message === 'string' ? d.message : String(details);
+        const tag = d?.level === 'error' ? 'ERROR' : d?.level === 'warning' ? 'WARN' : 'LOG';
+        console.log(`[renderer:${tag}] ${msg}`);
+      }
+    );
+  }
 
   if (is.dev && process.env['ELECTRON_RENDERER_URL']) {
     mainWindow.loadURL(process.env['ELECTRON_RENDERER_URL']);
@@ -254,6 +270,7 @@ function registerIpcHandlers(): void {
    * cannot redirect this into a generic network proxy.
    */
   ipcMain.handle('fetch-version-list', async (_event, kind: string) => {
+    console.log('[version-list] handler called, kind:', kind);
     const urls: Record<string, string> = {
       minecraft: 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json',
       fabric: 'https://meta.fabricmc.net/v2/versions/loader',
@@ -263,7 +280,11 @@ function registerIpcHandlers(): void {
     if (!url) return { success: false, error: 'Invalid kind' };
 
     try {
-      const res = await net.fetch(url);
+      console.log('[version-list] fetching:', url);
+      // Node 20+ global fetch (Electron 40) — `net.fetch` has proven flaky here.
+      // 8s timeout so a hung request surfaces as an error instead of an eternal spinner.
+      const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      console.log('[version-list] response status:', res.status);
       if (!res.ok) return { success: false, error: `HTTP ${res.status}` };
       const json = await res.json();
 
@@ -271,16 +292,22 @@ function registerIpcHandlers(): void {
         const releases = ((json as { versions?: { id: string; type: string }[] }).versions || [])
           .filter((v) => v.type === 'release')
           .map((v) => v.id);
+        console.log('[version-list] parsed, count:', releases.length);
         return { success: true, versions: releases };
       }
 
-      // Fabric and Quilt both return [{ loader: { version: "..." } }, ...]
+      // Fabric (/v2) and Quilt (/v3) both return a FLAT array whose entries
+      // carry the loader version at TOP level, e.g.
+      //   { maven: "net.fabricmc:fabric-loader:0.19.5", version: "0.19.5", ... }
+      // There is NO nested `loader` object — assuming one silently yielded 0
+      // versions and left the dialog's dropdown spinning forever.
       const versions = (Array.isArray(json) ? json : [])
-        .map((e) => (e as { loader?: { version?: string } } | null)?.loader?.version)
+        .map((e) => (e as { version?: string } | null)?.version)
         .filter((v): v is string => !!v);
+      console.log('[version-list] parsed, count:', versions.length);
       return { success: true, versions };
     } catch (err) {
-      console.error(`[version-list] ${kind} fetch failed:`, err);
+      console.error('[version-list] ERROR:', err);
       return { success: false, error: String(err) };
     }
   });

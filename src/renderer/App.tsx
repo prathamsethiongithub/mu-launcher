@@ -323,41 +323,48 @@ function App() {
     startLaunch();
   }, [worlds, isRunning, handleSetActiveWorld, startLaunch]);
 
-  const renderView = () => {
-    switch (currentView) {
-      case 'auth':
-        return <IdentityView />;
-      case 'play':
-        return (
-          <PlayView
-            launching={launching}
-            launchError={launchError}
-            launchSteps={launchSteps}
-            isRunning={isRunning}
-            onPlay={startLaunch}
-            onRetry={retryLaunch}
-            onCancelLaunch={cancelLaunch}
-            activeWorld={activeWorld}
-            worlds={worlds}
-            onSetActiveWorld={handleSetActiveWorld}
-          />
-        );
-      case 'worlds':
-        return (
-          <WorldsView
-            worlds={worlds}
-            activeWorldId={activeWorld?.id || null}
-            onSetActive={handleSetActiveWorld}
-            onWorldsChanged={loadWorlds}
-            onPlayWorld={handlePlayWorld}
-          />
-        );
-      case 'settings':
-        return <SettingsView activeWorld={activeWorld} onWorldsChanged={loadWorlds} />;
-      default:
-        return null;
-    }
-  };
+  // Keep-alive navigation: every view stays mounted and visibility is driven
+  // by CSS display instead of mount/unmount. The Play scene (two WebGL
+  // contexts + three.js shader compilation) is the cost the old switch()
+  // paid on every return trip — a measured 70–95ms main-thread freeze on
+  // Worlds→Play. Hiding rather than unmounting keeps those contexts alive,
+  // and PlayView's IntersectionObserver keeps its RAF paused while hidden,
+  // so nothing burns GPU in the background. One-time effects elsewhere
+  // (worlds list, identity accounts) still run on first mount as before;
+  // nothing in these views depends on remounting to refresh its data.
+  const renderView = () => (
+    <>
+      <div className="h-full" style={{ display: currentView === 'auth' ? 'block' : 'none' }}>
+        <IdentityView />
+      </div>
+      <div className="h-full" style={{ display: currentView === 'play' ? 'block' : 'none' }}>
+        <PlayView
+          launching={launching}
+          launchError={launchError}
+          launchSteps={launchSteps}
+          isRunning={isRunning}
+          onPlay={startLaunch}
+          onRetry={retryLaunch}
+          onCancelLaunch={cancelLaunch}
+          activeWorld={activeWorld}
+          worlds={worlds}
+          onSetActiveWorld={handleSetActiveWorld}
+        />
+      </div>
+      <div className="h-full" style={{ display: currentView === 'worlds' ? 'block' : 'none' }}>
+        <WorldsView
+          worlds={worlds}
+          activeWorldId={activeWorld?.id || null}
+          onSetActive={handleSetActiveWorld}
+          onWorldsChanged={loadWorlds}
+          onPlayWorld={handlePlayWorld}
+        />
+      </div>
+      <div className="h-full" style={{ display: currentView === 'settings' ? 'block' : 'none' }}>
+        <SettingsView activeWorld={activeWorld} onWorldsChanged={loadWorlds} />
+      </div>
+    </>
+  );
 
   return (
     <>

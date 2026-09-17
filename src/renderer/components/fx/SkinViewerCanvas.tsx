@@ -76,6 +76,10 @@ const SkinViewerCanvas: React.FC<SkinViewerProps> = ({
   const animRef = useRef<PlayerDirector | null>(null);
   const reducedRef = useRef(false);
   const viewerRef = useRef<SkinViewer | null>(null);
+  // Mirrors the IntersectionObserver state inside the init effect: true only
+  // while the stage wrapper actually intersects the viewport. display:none
+  // parents (keep-alive navigation) report isIntersecting: false.
+  const ioVisibleRef = useRef(true);
   const [ready, setReady] = useState(false);
 
   // Init viewer once
@@ -189,15 +193,26 @@ const SkinViewerCanvas: React.FC<SkinViewerProps> = ({
     // cleanly on return (renderPaused re-arms the internal RAF). The pose
     // continues from where it was — the director clamps frame deltas, so
     // no lurch.
+    // keep-alive note: with the Play view now hidden via CSS (App renders
+    // all views with display:none) the app window stays visible and
+    // focused, so the document-level signals below never fire. An
+    // IntersectionObserver on the wrapper is the element-level gate that
+    // actually notices display:none and pauses the loop off-screen.
     const pauseIfInactive = () => {
       if (reduced) return;
-      viewer.renderPaused = document.hidden || !document.hasFocus();
+      viewer.renderPaused = document.hidden || !document.hasFocus() || !ioVisibleRef.current;
     };
+    const io = new IntersectionObserver(([entry]) => {
+      ioVisibleRef.current = entry.isIntersecting;
+      pauseIfInactive();
+    });
+    io.observe(wrap);
     document.addEventListener('visibilitychange', pauseIfInactive);
     window.addEventListener('blur', pauseIfInactive);
     window.addEventListener('focus', pauseIfInactive);
 
     return () => {
+      io.disconnect();
       document.removeEventListener('visibilitychange', pauseIfInactive);
       window.removeEventListener('blur', pauseIfInactive);
       window.removeEventListener('focus', pauseIfInactive);
