@@ -20,6 +20,8 @@ interface WorldsViewProps {
   activeWorldId: string | null;
   onSetActive: (id: string) => void;
   onWorldsChanged: () => void;
+  /** Launch a world directly from the shelf. Omit to hide the Play buttons. */
+  onPlayWorld?: (worldId: string) => void;
 }
 
 type HealthStatus = 'healthy' | 'warning' | 'corrupted';
@@ -64,7 +66,7 @@ const HEALTH_COLOR: Record<HealthStatus, string> = {
   corrupted: 'text-danger/60',
 };
 
-const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetActive, onWorldsChanged }) => {
+const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetActive, onWorldsChanged, onPlayWorld }) => {
   const [showNewDialog, setShowNewDialog] = useState(false);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
@@ -80,6 +82,9 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
   const [restoringBackup, setRestoringBackup] = useState<string | null>(null);
   const [deletingBackup, setDeletingBackup] = useState<string | null>(null);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
+  const [pendingModpack, setPendingModpack] = useState<{ name: string; version: string; minecraft: string; loader: string; filePath: string } | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Close menu on outside click
@@ -234,7 +239,29 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
   };
 
   return (
-    <div className="relative z-[1] flex h-full flex-col items-center px-10 pt-20 pb-24">
+    <div
+      className="relative z-[1] flex h-full flex-col items-center px-10 pt-20 pb-24"
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onDrop={async (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const file = e.dataTransfer.files[0];
+        if (!file) return;
+        // Electron ≥32 removed File.path — resolve through the preload bridge.
+        const filePath = window.electronAPI.getPathForFile(file);
+        if (!filePath) return;
+        const result = await window.electronAPI.parseModpack(filePath);
+        if (result.success && result.modpack) {
+          setPendingModpack({ ...result.modpack, filePath });
+        } else {
+          setError(result.error || 'Not a valid Modrinth modpack');
+          setTimeout(() => setError(null), 3000);
+        }
+      }}
+    >
       {/* Header */}
       <div className="rise d1 mb-12 w-full max-w-[520px]">
         <p className="microlabel mb-3">Worlds</p>
@@ -259,19 +286,17 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
 
           return (
             <React.Fragment key={world.id}>
-              {idx > 0 && <div className="hairline-t h-px" />}
-
               <div
                 role="button"
                 tabIndex={world.broken || isActive ? -1 : 0}
                 onClick={() => !world.broken && !isActive && onSetActive(world.id)}
-                className={`group relative flex items-center gap-4 py-4 pl-3 pr-4 transition-all duration-micro ease-exit ${
+                className={`group relative mb-2 flex items-center gap-4 rounded-[12px] border border-white/[0.06] py-4 pl-5 pr-5 transition-all duration-micro ease-exit hover:border-white/[0.12] ${
                   isDeleting ? 'opacity-0' : ''
-                } ${world.broken || isActive ? 'cursor-default' : 'cursor-pointer'}`}
+                } ${isActive ? 'border-ember/30' : ''} ${world.broken || isActive ? 'cursor-default' : 'cursor-pointer'}`}
               >
                 {/* Active rail */}
                 {isActive && (
-                  <span className="absolute left-0 top-1/2 h-7 w-[2px] -translate-y-1/2 rounded-full bg-ember" />
+                  <span className="absolute left-0 top-0 h-full w-[2px] rounded-l-[12px] bg-ember/50" />
                 )}
 
                 {/* Icon */}
@@ -342,16 +367,31 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
                   {renameError && renamingId === world.id && (
                     <p className="text-[11px] text-danger/80">{renameError}</p>
                   )}
-                  {/* ≤4 quiet facts. Backup count already lives in the menu
-                      label — never the same fact twice on one row. */}
-                  <div className="font-mono text-[10px] tabular-nums text-faint">
-                    {world.version} · {world.loader === 'vanilla' ? 'Vanilla' : `${world.loader.charAt(0).toUpperCase() + world.loader.slice(1)} ${world.loaderVersion}`}
-                    {wMetrics.worldSize > 0 && <> · {humanSize(wMetrics.worldSize)} on disk</>}
-                    {' · '}
-                    {timeAgo(world.lastPlayedAt)}
+                  {/* Instance facts — quiet sans, stacked. The server line only
+                      appears when the world has an assigned one. */}
+                  <div className="flex flex-col gap-1 text-[12px]">
+                    <span className="text-dim">Minecraft {world.version} · {world.loader === 'vanilla' ? 'Vanilla' : `Fabric ${world.loaderVersion}`}</span>
+                    <span className="text-faint">{Math.round(world.ramAllocation / 1024)} GB · {wMetrics.worldSize > 0 ? humanSize(wMetrics.worldSize) : '—'} on disk · {world.lastPlayedAt ? timeAgo(world.lastPlayedAt) : 'Never'}</span>
+                    {world.assignedServer && (
+                      <span className="text-faint">Server: {world.assignedServer.ip}</span>
+                    )}
                   </div>
                 </div>
 
+                {/* Right rail — Play + overflow actions */}
+                <div className="flex shrink-0 items-center gap-2">
+                  {!world.broken && onPlayWorld && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onPlayWorld(world.id);
+                      }}
+                      disabled={isLoading}
+                      className="rounded-[8px] border border-white/[0.08] px-4 py-1.5 text-[12px] font-medium text-dim transition-all duration-micro hover:border-ember/30 hover:bg-ember/10 hover:text-ember disabled:opacity-30 disabled:hover:border-white/[0.08] disabled:hover:bg-transparent disabled:hover:text-dim"
+                    >
+                      Play
+                    </button>
+                  )}
                 {/* Overflow menu — personal worlds only */}
                 {!isManaged && !isRenaming && !isDeleting && (
                   <div className="relative shrink-0" ref={menuOpenId === world.id ? menuRef : null}>
@@ -403,6 +443,27 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><path d="M3 7h18M3 12h18M3 17h18" /></svg>
                           Backups{backups > 0 ? ` (${backups})` : ''}
                         </button>
+                        {world.broken && (
+                          <button
+                            onClick={async () => {
+                              setActionLoading(world.id);
+                              const result = await window.electronAPI.repairWorld(world.id);
+                              setActionLoading(null);
+                              if (result.success) {
+                                onWorldsChanged();
+                              } else {
+                                setError(result.error || 'Repair failed');
+                                setTimeout(() => setError(null), 3000);
+                              }
+                              setMenuOpenId(null);
+                            }}
+                            disabled={isLoading}
+                            className="flex w-full items-center gap-2 rounded-[6px] px-3 py-2 text-left text-[12px] text-ember transition-colors hover:bg-ember/10 disabled:opacity-30"
+                          >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" /></svg>
+                            Repair
+                          </button>
+                        )}
                         <div className="h-px bg-line my-1" />
                         <button
                           onClick={() => { setMenuOpenId(null); setDeletingId(world.id); }}
@@ -416,6 +477,7 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
                     )}
                   </div>
                 )}
+                </div>
 
                 {/* Loading spinner */}
                 {isLoading && (
@@ -576,6 +638,52 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
             onWorldsChanged();
           }}
         />
+      )}
+
+      {/* Modpack confirm dialog */}
+      {pendingModpack && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="absolute inset-0 bg-black/50" onClick={() => !importing && setPendingModpack(null)} />
+          <div className="surface panel-in relative m-4 w-full max-w-[420px] rounded-[18px] p-8">
+            <button onClick={() => !importing && setPendingModpack(null)} className="absolute right-5 top-4 text-[18px] text-faint hover:text-ink">&times;</button>
+            <p className="microlabel mb-3">Modpack Detected</p>
+            <h2 className="font-display text-[24px] font-bold tracking-[-0.03em] text-ink">{pendingModpack.name}</h2>
+            <p className="mt-3 text-[13px] text-dim">
+              Minecraft {pendingModpack.minecraft} · {pendingModpack.loader ? `Fabric ${pendingModpack.loader}` : 'Vanilla'}
+            </p>
+            <p className="mt-1 text-[13px] text-faint">This will create a new instance with the correct version and loader.</p>
+            <button
+              disabled={importing}
+              onClick={async () => {
+                setImporting(true);
+                const result = await window.electronAPI.createWorld({
+                  name: pendingModpack.name,
+                  version: pendingModpack.minecraft,
+                  loader: pendingModpack.loader ? 'fabric' : 'vanilla',
+                  loaderVersion: pendingModpack.loader || undefined,
+                  ramAllocation: 4096,
+                });
+                setImporting(false);
+                if (result.success) {
+                  setPendingModpack(null);
+                  onWorldsChanged();
+                } else {
+                  setError(result.error || 'Failed to create world');
+                }
+              }}
+              className="pill-ember mt-6"
+            >
+              {importing ? 'Creating...' : 'Create Instance'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Error toast */}
+      {error && (
+        <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 rounded-[10px] bg-danger/20 px-4 py-2 text-[12px] text-danger">
+          {error}
+        </div>
       )}
     </div>
   );

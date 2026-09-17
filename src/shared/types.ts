@@ -35,7 +35,7 @@ export enum AppView {
 // ── PROD-006: Worlds System ────────────────────────────────────────────
 
 export type WorldType = 'managed' | 'personal';
-export type LoaderType = 'vanilla' | 'fabric' | 'forge' | 'quilt';
+export type LoaderType = 'vanilla' | 'fabric' | 'forge' | 'quilt' | 'neoforge';
 export type ModProvider = 'modrinth' | 'curseforge' | 'local';
 export type HashFormat = 'sha1' | 'sha512' | null;
 

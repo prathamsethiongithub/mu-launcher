@@ -1,5 +1,6 @@
 import { app } from 'electron';
 import { join } from 'path';
+import * as os from 'node:os';
 import {
   existsSync,
   mkdirSync,
@@ -11,6 +12,7 @@ import {
   readdirSync,
   rmSync,
   copyFileSync,
+  cpSync,
 } from 'fs';
 import { randomUUID } from 'crypto';
 import { readdir as fspReaddir, stat as fspStat } from 'fs/promises';
@@ -57,7 +59,7 @@ const MANAGED_WORLD_CONFIG = {
   rootPath: '{userData}/minecraft',
   ramAllocation: 4096,
   assignedServer: {
-    ip: 'mastersunion.minekeep.gg',
+    ip: 'prathamsethi.minekeep.gg',
     port: 25565,
     label: "Masters' Union SMP",
   } as WorldServer,
@@ -149,6 +151,8 @@ export class WorldManager {
     loaderVersion?: string;
     ramAllocation?: number;
     assignedServer?: WorldServer | null;
+    /** Optional instance folder whose global settings seed this world. */
+    settingsPath?: string;
   }): World | null {
     const id = randomUUID();
     const rootPath = `{userData}/worlds/${id}/minecraft`;
@@ -163,6 +167,50 @@ export class WorldManager {
     } catch (err) {
       console.error(`[worlds] Failed to create world directory at ${root}:`, err);
       return null;
+    }
+
+    // Import the user's GLOBAL Minecraft settings (FOV, keybinds, Sodium/mod
+    // config) so a fresh world starts feeling like their own install instead
+    // of a blank slate. Best-effort by design: a missing global install, a
+    // locked file, or a partial copy must never fail world creation — the
+    // world is valid without imported settings, so this is warn-and-continue.
+    // Placed AFTER the mkdir block above: `root` exists here, and options.txt /
+    // config/ land directly in the world's game root where MCLC points the
+    // game, exactly where a vanilla launcher would read them.
+    try {
+      // Source resolution. Multi-launcher users keep settings in PER-INSTANCE
+      // directories, and those come in two shapes: vanilla-style dirs hold
+      // options.txt at the root, while MultiMC/Prism-style instances nest the
+      // game dir in `.minecraft/` or `minecraft/`. Probe in that order so a
+      // picked instance root just works; fall back to the default global
+      // .minecraft when the user didn't pick anything.
+      const defaultGlobal =
+        process.platform === 'win32'
+          ? join(process.env.APPDATA || '', '.minecraft')
+          : process.platform === 'darwin'
+            ? join(os.homedir(), 'Library', 'Application Support', 'minecraft')
+            : join(os.homedir(), '.minecraft');
+      const candidates = spec.settingsPath
+        ? [spec.settingsPath, join(spec.settingsPath, '.minecraft'), join(spec.settingsPath, 'minecraft')]
+        : [defaultGlobal];
+      const sourcePath =
+        candidates.find((c) => existsSync(join(c, 'options.txt')) || existsSync(join(c, 'config'))) ||
+        spec.settingsPath ||
+        defaultGlobal;
+
+      // options.txt — FOV, keybinds, video/audio settings, accessibility.
+      const globalOptions = join(sourcePath, 'options.txt');
+      if (existsSync(globalOptions)) {
+        copyFileSync(globalOptions, join(root, 'options.txt'));
+      }
+
+      // config/ — mod configs live here (Sodium, Iris, etc.).
+      const globalConfig = join(sourcePath, 'config');
+      if (existsSync(globalConfig)) {
+        cpSync(globalConfig, join(root, 'config'), { recursive: true });
+      }
+    } catch (err) {
+      console.warn(`[worlds] Global settings import skipped for "${spec.name}":`, err);
     }
 
     const world: World = {

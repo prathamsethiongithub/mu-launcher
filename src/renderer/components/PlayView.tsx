@@ -57,7 +57,7 @@ const STAGES = [
   { id: 'mc',   label: 'Launching',      real: ['launching', 'running'] },
 ] as const;
 
-const SERVER_HOST = 'mastersunion.minekeep.gg';
+const SERVER_HOST = 'prathamsethi.minekeep.gg';
 
 /**
  * The hero composition's two independent heights (see the HERO LAYER comment

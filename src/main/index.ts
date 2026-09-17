@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, dialog, net } from 'electron';
 import { join } from 'path';
 import { readFileSync, statSync } from 'fs';
 import { is } from '@electron-toolkit/utils';
@@ -227,6 +227,46 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('get-platform', () => {
     return process.platform;
+  });
+
+  /**
+   * 'fetch-version-list' — Fetches a version manifest from the main process.
+   * The main process has no CSP/CORS restrictions, so version metadata
+   * (Mojang manifest, Fabric/Quilt meta) is fetched here and handed to the
+   * renderer over IPC — the same pattern Prism Launcher uses. Kind selects
+   * the manifest; only allowlisted URLs are ever requested, so the renderer
+   * cannot redirect this into a generic network proxy.
+   */
+  ipcMain.handle('fetch-version-list', async (_event, kind: string) => {
+    const urls: Record<string, string> = {
+      minecraft: 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json',
+      fabric: 'https://meta.fabricmc.net/v2/versions/loader',
+      quilt: 'https://meta.quiltmc.org/v3/versions/loader',
+    };
+    const url = urls[kind];
+    if (!url) return { success: false, error: 'Invalid kind' };
+
+    try {
+      const res = await net.fetch(url);
+      if (!res.ok) return { success: false, error: `HTTP ${res.status}` };
+      const json = await res.json();
+
+      if (kind === 'minecraft') {
+        const releases = ((json as { versions?: { id: string; type: string }[] }).versions || [])
+          .filter((v) => v.type === 'release')
+          .map((v) => v.id);
+        return { success: true, versions: releases };
+      }
+
+      // Fabric and Quilt both return [{ loader: { version: "..." } }, ...]
+      const versions = (Array.isArray(json) ? json : [])
+        .map((e) => (e as { loader?: { version?: string } } | null)?.loader?.version)
+        .filter((v): v is string => !!v);
+      return { success: true, versions };
+    } catch (err) {
+      console.error(`[version-list] ${kind} fetch failed:`, err);
+      return { success: false, error: String(err) };
+    }
   });
 
   // --- Java Runtime Provisioning ---
@@ -481,6 +521,70 @@ function registerIpcHandlers(): void {
   });
 
   /**
+   * 'parse-modpack' — Phase 1 of drag-and-drop modpack import: read a zip from
+   * disk and detect a Modrinth modpack (modrinth.index.json at its root).
+   * Returns the pack's identity so the UI can confirm before any download.
+   * The whole body is wrapped — a corrupt/encrypted zip must never crash the
+   * main process. adm-zip is dynamically imported (same deferral pattern as
+   * java-provisioner) so it stays off the startup path.
+   */
+  ipcMain.handle('parse-modpack', async (_event, filePath: string) => {
+    if (!filePath || typeof filePath !== 'string') {
+      return { success: false, error: 'No file path provided.' };
+    }
+    try {
+      const AdmZip = (await import('adm-zip')).default;
+      // Read the archive OURSELVES and hand adm-zip a Buffer: its string-path
+      // constructor throws INVALID_FILENAME whenever its internal existsSync
+      // disagrees (observed live with a valid .mrpack path), and it only
+      // auto-loads .zip reliably — a Buffer works for any extension.
+      const archive = readFileSync(filePath);
+      const zip = new AdmZip(archive);
+      const entry = zip.getEntry('modrinth.index.json');
+      if (!entry) {
+        return { success: false, error: 'Not a valid Modrinth modpack' };
+      }
+      const manifest = JSON.parse(entry.getData().toString('utf8')) as {
+        name?: string;
+        versionId?: string;
+        dependencies?: Record<string, string>;
+      };
+      const deps = manifest.dependencies || {};
+      return {
+        success: true,
+        modpack: {
+          name: manifest.name || 'Unknown modpack',
+          version: manifest.versionId || '',
+          minecraft: deps.minecraft || '',
+          loader: deps['fabric-loader'] || '',
+        },
+      };
+    } catch (err) {
+      // Diagnostics in the message: if the path ever arrives mangled over IPC,
+      // the log shows exactly what the handler received; readFileSync's own
+      // error names the real filesystem problem (ENOENT vs zip corruption).
+      console.error(`[modpack] Failed to parse "${filePath}":`, err);
+      return { success: false, error: 'Could not read that file as a modpack.' };
+    }
+  });
+
+  /**
+   * 'select-directory' — Native folder picker. Used by the New World dialog so
+   * multi-launcher users can point at the instance folder whose global settings
+   * (options.txt, config/) should seed the new world. Resolves to the chosen
+   * absolute path, or null when cancelled.
+   */
+  ipcMain.handle('select-directory', async () => {
+    // mainWindow can be null during teardown — fall back to the window-less
+    // dialog so the picker still opens attached to nothing rather than throwing.
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
+      : await dialog.showOpenDialog({ properties: ['openDirectory'] });
+    if (result.canceled) return null;
+    return result.filePaths[0];
+  });
+
+  /**
    * 'create-world' — Creates a new personal world.
    * Provisions the filesystem directory and registers it in worlds.json.
    * Takes name, version, loader, and optional params.
@@ -491,6 +595,7 @@ function registerIpcHandlers(): void {
     loader: string;
     loaderVersion?: string;
     ramAllocation?: number;
+    settingsPath?: string;
   }) => {
     if (!worldManager) {
       return { success: false, error: 'World system not initialized.' };
@@ -498,8 +603,9 @@ function registerIpcHandlers(): void {
     if (!spec.name || !spec.version || !spec.loader) {
       return { success: false, error: 'name, version, and loader are required.' };
     }
-    if (spec.loader !== 'vanilla' && spec.loader !== 'fabric') {
-      return { success: false, error: 'Unsupported loader. Use "vanilla" or "fabric".' };
+    const supportedLoaders: readonly string[] = ['vanilla', 'fabric', 'quilt', 'forge', 'neoforge'];
+    if (!supportedLoaders.includes(spec.loader)) {
+      return { success: false, error: 'Unsupported loader. Use vanilla, fabric, quilt, forge, or neoforge.' };
     }
     const world = worldManager.createWorld({
       name: spec.name,
@@ -507,6 +613,7 @@ function registerIpcHandlers(): void {
       loader: spec.loader as LoaderType,
       loaderVersion: spec.loaderVersion,
       ramAllocation: spec.ramAllocation,
+      settingsPath: spec.settingsPath,
     });
     if (!world) {
       return { success: false, error: 'Failed to create world — filesystem error.' };
@@ -580,6 +687,20 @@ function registerIpcHandlers(): void {
   ipcMain.handle('check-world-health', async (_event, worldId: string) => {
     if (!worldManager) return 'corrupted';
     return worldManager.checkWorldHealth(worldId);
+  });
+
+  /**
+   * 'repair-world' — Recreate a broken world's root directory so it can
+   * launch again. Pairs with 'check-world-health' above.
+   */
+  ipcMain.handle('repair-world', async (_event, worldId: string) => {
+    if (!worldManager) return { success: false, error: 'World system not initialized.' };
+    try {
+      const success = worldManager.repairWorld(worldId);
+      return { success, error: success ? undefined : 'Repair failed' };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
   });
 
   ipcMain.handle('backup-world', async (_event, worldId: string) => {

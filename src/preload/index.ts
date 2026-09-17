@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { Account, SkinProfile } from '../shared/types';
 
 contextBridge.exposeInMainWorld('electronAPI', {
@@ -144,8 +144,33 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** PoC: Launch Minecraft from an isolated root directory. */
   launchPoc: (javaPath: string, root: string) => ipcRenderer.invoke('launch-poc', javaPath, root),
 
+  /**
+   * Fetch a version manifest via the main process (no CSP/CORS there).
+   * kind: 'minecraft' → Mojang release ids; 'fabric'/'quilt' → loader versions.
+   */
+  fetchVersionList: (kind: 'minecraft' | 'fabric' | 'quilt') =>
+    ipcRenderer.invoke('fetch-version-list', kind) as Promise<{
+      success: boolean;
+      versions?: string[];
+      error?: string;
+    }>,
+
   /** Create a new personal world. */
-  createWorld: (spec: { name: string; version: string; loader: string; loaderVersion?: string; ramAllocation?: number }) =>
+  selectDirectory: () => ipcRenderer.invoke('select-directory') as Promise<string | null>,
+
+  /** Resolve the absolute path of a File dropped into the renderer.
+   *  Electron ≥32 removed File.path — webUtils is the official replacement,
+   *  and it is only callable from the preload side. */
+  getPathForFile: (file: File) => webUtils.getPathForFile(file),
+
+  /** Phase 1 modpack import: detect and parse a Modrinth modpack zip. */
+  parseModpack: (filePath: string) =>
+    ipcRenderer.invoke('parse-modpack', filePath) as Promise<{
+      success: boolean;
+      modpack?: { name: string; version: string; minecraft: string; loader: string };
+      error?: string;
+    }>,
+  createWorld: (spec: { name: string; version: string; loader: string; loaderVersion?: string; ramAllocation?: number; settingsPath?: string }) =>
     ipcRenderer.invoke('create-world', spec),
 
   /** Returns all worlds from the registry. */
@@ -180,6 +205,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Check world health. */
   checkWorldHealth: (worldId: string) =>
     ipcRenderer.invoke('check-world-health', worldId) as Promise<'healthy' | 'warning' | 'corrupted'>,
+
+  /** Repair a broken world by recreating its root directory. */
+  repairWorld: (worldId: string) =>
+    ipcRenderer.invoke('repair-world', worldId),
 
   /** Create a backup of a world's saves. */
   backupWorld: (worldId: string) =>

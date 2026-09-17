@@ -9,7 +9,7 @@ export type ServerInjectorStepCallback = (step: string, status: string) => void;
 export class ServerInjector {
   private mcDataDir: string;
   private serverName: string = "Masters' Union SMP";
-  private serverIp: string = 'mastersunion.minekeep.gg';
+  private serverIp: string = 'prathamsethi.minekeep.gg';
   private serverPort: number = 25565;
   private _onStep: ServerInjectorStepCallback | null = null;
 

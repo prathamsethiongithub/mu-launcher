@@ -309,6 +309,20 @@ function App() {
     await loadWorlds();
   }, [worlds, loadWorlds]);
 
+  // Play directly from the Worlds shelf: make the world active, hand the
+  // user back to the Play view so they watch the launch filament, then run
+  // the same guarded pipeline the Play CTA uses (launchingRef still guards
+  // against double-fire). Broken worlds never reach here from the UI —
+  // the shelf's Play button is disabled — but the guard is belt-and-braces.
+  const handlePlayWorld = useCallback(async (worldId: string) => {
+    const target = worlds.find((w) => w.id === worldId);
+    if (!target || target.broken) return;
+    if (launchingRef.current || isRunning) return;
+    await handleSetActiveWorld(worldId);
+    setCurrentView('play');
+    startLaunch();
+  }, [worlds, isRunning, handleSetActiveWorld, startLaunch]);
+
   const renderView = () => {
     switch (currentView) {
       case 'auth':
@@ -335,6 +349,7 @@ function App() {
             activeWorldId={activeWorld?.id || null}
             onSetActive={handleSetActiveWorld}
             onWorldsChanged={loadWorlds}
+            onPlayWorld={handlePlayWorld}
           />
         );
       case 'settings':

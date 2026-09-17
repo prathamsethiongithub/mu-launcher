@@ -63,8 +63,28 @@ interface ElectronAPI {
   launchGame: (javaPath: string) => Promise<{ success: boolean; error?: string }>;
   /** PoC: Launch Minecraft from an isolated root directory. */
   launchPoc: (javaPath: string, root: string) => Promise<{ success: boolean; error?: string }>;
+  /** Fetch a version manifest via the main process (bypasses renderer CSP). */
+  fetchVersionList: (
+    kind: 'minecraft' | 'fabric' | 'quilt'
+  ) => Promise<{ success: boolean; versions?: string[]; error?: string }>;
+
+  /** Open a native folder picker; resolves to the chosen path, or null on cancel. */
+  selectDirectory: () => Promise<string | null>;
+
+  /** Resolve the absolute path of a File dropped into the renderer
+   *  (Electron ≥32 removed File.path — this bridges webUtils from preload). */
+  getPathForFile: (file: File) => string;
+
+  /** Phase 1 modpack import: detect and parse a Modrinth modpack zip. */
+  parseModpack: (filePath: string) =>
+    Promise<{
+      success: boolean;
+      modpack?: { name: string; version: string; minecraft: string; loader: string };
+      error?: string;
+    }>;
+
   /** Create a new personal world. */
-  createWorld: (spec: { name: string; version: string; loader: string; loaderVersion?: string; ramAllocation?: number }) =>
+  createWorld: (spec: { name: string; version: string; loader: string; loaderVersion?: string; ramAllocation?: number; settingsPath?: string }) =>
     Promise<{ success: boolean; world?: World; error?: string }>;
 
   /** Returns all worlds from the registry. */
@@ -89,6 +109,9 @@ interface ElectronAPI {
   getWorldMetrics: (worldId: string) => Promise<{ worldSize: number; backupSize: number }>;
   /** Check world health. */
   checkWorldHealth: (worldId: string) => Promise<'healthy' | 'warning' | 'corrupted'>;
+
+  /** Repair a broken world by recreating its root directory. */
+  repairWorld: (worldId: string) => Promise<{ success: boolean; error?: string }>;
   /** Create a backup. */
   backupWorld: (worldId: string) => Promise<{ success: boolean; error?: string; backupPath?: string }>;
   /** Get backups list. */
