@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import NewWorldDialog from './NewWorldDialog';
+import ModManagerModal from './ModManagerModal';
 
 interface WorldData {
   id: string;
@@ -83,6 +84,8 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
   const [deletingBackup, setDeletingBackup] = useState<string | null>(null);
   const [backupMessage, setBackupMessage] = useState<string | null>(null);
   const [pendingModpack, setPendingModpack] = useState<{ name: string; version: string; minecraft: string; loader: string; filePath: string } | null>(null);
+  // Which world's Mod Manager modal is open (null = closed).
+  const [modManagerWorld, setModManagerWorld] = useState<{ id: string; name: string } | null>(null);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -436,6 +439,16 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
                           Back up
                         </button>
                         <button
+                          onClick={() => {
+                            setModManagerWorld({ id: world.id, name: world.name });
+                            setMenuOpenId(null);
+                          }}
+                          className="flex w-full items-center gap-2 rounded-[6px] px-3 py-2 text-left text-[12px] text-dim transition-colors hover:bg-white/[0.04] hover:text-ink"
+                        >
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" /><path d="M3.27 6.96L12 12.01l8.73-5.05M12 22.08V12" /></svg>
+                          Mod Manager
+                        </button>
+                        <button
                           onClick={() => toggleBackups(world.id)}
                           disabled={isLoading}
                           className="flex w-full items-center gap-2 rounded-[6px] px-3 py-2 text-left text-[12px] text-dim transition-colors hover:text-ink hover:bg-white/[0.03] disabled:opacity-30"
@@ -662,6 +675,7 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
                   loader: pendingModpack.loader ? 'fabric' : 'vanilla',
                   loaderVersion: pendingModpack.loader || undefined,
                   ramAllocation: 4096,
+                  modpackPath: pendingModpack.filePath,
                 });
                 setImporting(false);
                 if (result.success) {
@@ -684,6 +698,15 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
         <div className="fixed bottom-20 left-1/2 -translate-x-1/2 z-50 rounded-[10px] bg-danger/20 px-4 py-2 text-[12px] text-danger">
           {error}
         </div>
+      )}
+
+      {/* Mod Manager modal */}
+      {modManagerWorld && (
+        <ModManagerModal
+          worldId={modManagerWorld.id}
+          worldName={modManagerWorld.name}
+          onClose={() => setModManagerWorld(null)}
+        />
       )}
     </div>
   );

@@ -155,6 +155,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       error?: string;
     }>,
 
+  /** Live Server Pulse: query a Minecraft server's online status. */
+  pingServer: (host: string, port: number) =>
+    ipcRenderer.invoke('ping-server', host, port),
+
   /** Create a new personal world. */
   selectDirectory: () => ipcRenderer.invoke('select-directory') as Promise<string | null>,
 
@@ -170,7 +174,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       modpack?: { name: string; version: string; minecraft: string; loader: string };
       error?: string;
     }>,
-  createWorld: (spec: { name: string; version: string; loader: string; loaderVersion?: string; ramAllocation?: number; settingsPath?: string }) =>
+  createWorld: (spec: { name: string; version: string; loader: string; loaderVersion?: string; ramAllocation?: number; settingsPath?: string; modpackPath?: string }) =>
     ipcRenderer.invoke('create-world', spec),
 
   /** Returns all worlds from the registry. */
@@ -229,6 +233,54 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Delete a backup file. */
   deleteBackup: (worldId: string, backupName: string) =>
     ipcRenderer.invoke('delete-backup', worldId, backupName),
+
+  // ── Mod Management ───────────────────────────────────────────────────
+
+  /** List the mod files in a world's mods/ directory. */
+  listMods: (worldId: string) =>
+    ipcRenderer.invoke('mod-list', worldId) as Promise<
+      { filename: string; displayName: string; size: number; enabled: boolean }[]
+    >,
+
+  /** Enable or disable a mod (renamed in place). */
+  toggleMod: (worldId: string, filename: string, enable: boolean) =>
+    ipcRenderer.invoke('mod-toggle', worldId, filename, enable) as Promise<{
+      success: boolean;
+      error?: string;
+    }>,
+
+  /** Delete a mod file from the world's mods/ directory. */
+  deleteMod: (worldId: string, filename: string) =>
+    ipcRenderer.invoke('mod-delete', worldId, filename) as Promise<{
+      success: boolean;
+      error?: string;
+    }>,
+
+  /** Copy a .jar from disk into the world's mods/ directory. */
+  addMod: (worldId: string, sourceFilePath: string) =>
+    ipcRenderer.invoke('mod-add', worldId, sourceFilePath) as Promise<{
+      success: boolean;
+      error?: string;
+    }>,
+
+  /** Native file picker for a mod .jar; resolves to the path or null on cancel. */
+  selectModFile: () => ipcRenderer.invoke('select-mod-file') as Promise<string | null>,
+
+  // ── Modrinth Discover ────────────────────────────────────────────────
+
+  /** Search Modrinth for mods (game-version/loader facets applied in main). */
+  searchModrinth: (query: string, gameVersion?: string, loader?: string) =>
+    ipcRenderer.invoke('modrinth-search', query, gameVersion, loader) as Promise<
+      { id: string; title: string; description: string; author: string; downloads: number; iconUrl?: string }[]
+    >,
+
+  /** Install a Modrinth project's latest version into a world's mods/ directory. */
+  downloadMod: (worldId: string, projectId: string) =>
+    ipcRenderer.invoke('modrinth-download', worldId, projectId) as Promise<{
+      success: boolean;
+      error?: string;
+      filename?: string;
+    }>,
 
   // ── Identity Management ──────────────────────────────────────────────
 

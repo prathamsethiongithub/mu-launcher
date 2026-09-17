@@ -5,13 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Master Launcher</title>
     <!-- img-src includes data: for the player-skin render (skinview3d loads
-         the skin via a data URL produced in the main process).
-         connect-src stays 'self': version metadata (Mojang/Fabric/Quilt) is
-         fetched by the MAIN process over IPC ('fetch-version-list') — the
+         the skin via a data URL produced in the main process) and the one
+         external origin Modrinth icons come from — Discover cards render
+         project icons straight from Modrinth's CDN. Everything else stays
+         local: connect-src remains 'self' (version metadata and Modrinth
+         search/download are fetched by the MAIN process over IPC) — the
          renderer never talks to the network directly. -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://cdn.modrinth.com; connect-src 'self'"
     />
   </head>
   <body>

@@ -10,6 +10,9 @@ import { validateExternalUrl, validatePath } from '../security/ipc-validate';
 import { runPreflightCheck } from './preflight-check';
 import { SkinService } from './skin-service';
 import { WorldManager } from './world-manager';
+import { listMods, toggleMod, deleteMod, addMod } from './mod-manager';
+import { installModpackOverrides } from './modpack-installer';
+import { pingMinecraftServer } from './server-pinger';
 import { IdentityService } from './identity-service';
 import type { Account, LoaderType } from '../shared/types';
 
@@ -227,6 +230,19 @@ function registerIpcHandlers(): void {
 
   ipcMain.handle('get-platform', () => {
     return process.platform;
+  });
+
+  /**
+   * 'ping-server' — Live Server Pulse: asks the main process to SLP-ping a
+   * Minecraft server. Hosts come from the world's assigned server or the
+   * built-in SMP; validation lives in server-pinger.
+   */
+  ipcMain.handle('ping-server', async (_event, host: string, port: number) => {
+    try {
+      return await pingMinecraftServer(host, port);
+    } catch (err) {
+      return { online: false };
+    }
   });
 
   /**
@@ -596,6 +612,8 @@ function registerIpcHandlers(): void {
     loaderVersion?: string;
     ramAllocation?: number;
     settingsPath?: string;
+    /** Modrinth modpack archive whose overrides/ gets unpacked into the world. */
+    modpackPath?: string;
   }) => {
     if (!worldManager) {
       return { success: false, error: 'World system not initialized.' };
@@ -617,6 +635,16 @@ function registerIpcHandlers(): void {
     });
     if (!world) {
       return { success: false, error: 'Failed to create world — filesystem error.' };
+    }
+    // Modpack import: unpack the archive's overrides/ into the new world root.
+    // Extraction failure must NOT undo the world — log and let creation stand.
+    if (spec.modpackPath && world) {
+      try {
+        const root = worldManager.resolveRoot(world);
+        await installModpackOverrides(spec.modpackPath, root);
+      } catch (err) {
+        console.error('Modpack overrides extraction failed:', err);
+      }
     }
     return { success: true, world };
   });
@@ -726,6 +754,134 @@ function registerIpcHandlers(): void {
   ipcMain.handle('delete-backup', async (_event, worldId: string, backupName: string) => {
     if (!worldManager) return { success: false, error: 'World system not initialized.' };
     return worldManager.deleteBackup(worldId, backupName);
+  });
+
+  // ── Mod Management IPC ───────────────────────────────────────────────
+  // Personal-world mods live in {root}/mods/. All four handlers resolve the
+  // world by id through WorldManager first — the renderer only ever sends a
+  // world id, never a filesystem path of its own.
+
+  /**
+   * 'mod-list' — Lists the mod files in a world's mods/ directory.
+   * Returns ModFileInfo[] ({ filename, name, size, enabled }), or [] when
+   * the world system isn't ready or the world doesn't exist.
+   */
+  ipcMain.handle('mod-list', async (_event, worldId: string) => {
+    if (!worldManager) return [];
+    const world = worldManager.getWorlds().find((w) => w.id === worldId);
+    if (!world) return [];
+    return await listMods(worldManager.resolveRoot(world));
+  });
+
+  /**
+   * 'mod-toggle' — Enables or disables a mod (renamed in place).
+   * Returns { success } or { success: false, error }.
+   */
+  ipcMain.handle('mod-toggle', async (_event, worldId: string, filename: string, enable: boolean) => {
+    if (!worldManager) return { success: false, error: 'Not ready' };
+    const world = worldManager.getWorlds().find((w) => w.id === worldId);
+    if (!world) return { success: false, error: 'World not found' };
+    try {
+      await toggleMod(worldManager.resolveRoot(world), filename, enable);
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  });
+
+  /**
+   * 'mod-delete' — Deletes a mod file from the world's mods/ directory.
+   * Returns { success } or { success: false, error }.
+   */
+  ipcMain.handle('mod-delete', async (_event, worldId: string, filename: string) => {
+    if (!worldManager) return { success: false, error: 'Not ready' };
+    const world = worldManager.getWorlds().find((w) => w.id === worldId);
+    if (!world) return { success: false, error: 'World not found' };
+    try {
+      await deleteMod(worldManager.resolveRoot(world), filename);
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  });
+
+  /**
+   * 'mod-add' — Copies a .jar from disk into the world's mods/ directory.
+   * Returns { success } or { success: false, error }.
+   */
+  ipcMain.handle('mod-add', async (_event, worldId: string, sourceFilePath: string) => {
+    if (!worldManager) return { success: false, error: 'Not ready' };
+    const world = worldManager.getWorlds().find((w) => w.id === worldId);
+    if (!world) return { success: false, error: 'World not found' };
+    try {
+      await addMod(worldManager.resolveRoot(world), sourceFilePath);
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: String(e) };
+    }
+  });
+
+  /**
+   * 'select-mod-file' — Native file picker for a mod .jar, used by the Mod
+   * Manager's "Add Mod". Kept separate from 'select-directory' (folders) and
+   * 'select-skin-file' (validated PNGs) so each picker owns its filters.
+   * Resolves to the chosen absolute path, or null when cancelled.
+   */
+  ipcMain.handle('select-mod-file', async () => {
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, {
+          title: 'Choose a mod',
+          filters: [{ name: 'Minecraft mod (JAR)', extensions: ['jar'] }],
+          properties: ['openFile'],
+        })
+      : await dialog.showOpenDialog({
+          title: 'Choose a mod',
+          filters: [{ name: 'Minecraft mod (JAR)', extensions: ['jar'] }],
+          properties: ['openFile'],
+        });
+    if (result.canceled) return null;
+    return result.filePaths[0];
+  });
+
+  // ── Modrinth Discover IPC ────────────────────────────────────────────
+  // Search and one-click install from Modrinth. Same world-id-only rule as
+  // the mod handlers above: the renderer never supplies a filesystem path —
+  // the world root resolves through WorldManager and the download URL comes
+  // from Modrinth's own API.
+
+  /**
+   * 'modrinth-search' — Searches Modrinth for mods. The main process has no
+   * CSP/CORS restrictions, so the API call happens here (same pattern as
+   * 'fetch-version-list'). gameVersion/loader filter the results so every
+   * hit is installable in THIS world. A 'mod' project_type facet is applied
+   * by the search module itself so plugins/datapacks don't pollute results.
+   */
+  ipcMain.handle('modrinth-search', async (_event, query: string, gameVersion?: string, loader?: string) => {
+    try {
+      const { searchModrinthMods } = await import('./mod-downloader');
+      return await searchModrinthMods(query, gameVersion, loader);
+    } catch (err) {
+      console.error('[modrinth-search] failed:', err);
+      return [];
+    }
+  });
+
+  /**
+   * 'modrinth-download' — Installs a Modrinth project's latest compatible
+   * version into a world's mods/ directory. downloadModFromModrinth has a
+   * never-throw contract (resolves to { success, error }); the try/catch is
+   * belt-and-braces so no IPC path can crash the main process.
+   */
+  ipcMain.handle('modrinth-download', async (_event, worldId: string, projectId: string) => {
+    if (!worldManager) return { success: false, error: 'World system not initialized.' };
+    const world = worldManager.getWorlds().find((w) => w.id === worldId);
+    if (!world) return { success: false, error: 'World not found.' };
+    try {
+      const { downloadModFromModrinth } = await import('./mod-downloader');
+      return await downloadModFromModrinth(worldManager.resolveRoot(world), projectId);
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
   });
 
   // ── Identity Management IPC ──────────────────────────────────────────

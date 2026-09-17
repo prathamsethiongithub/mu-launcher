@@ -133,6 +133,7 @@ const PlayView: React.FC<PlayViewProps> = ({
   const [hasLaunchedBefore] = useState(getEmberCount() > 0);
   const [showAuthPanel, setShowAuthPanel] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
+  const [serverStatus, setServerStatus] = useState<{ online: boolean; players?: { online: number; max: number } } | null>(null);
 
   useEffect(() => { checkAuth(); }, []);
 
@@ -142,6 +143,23 @@ const PlayView: React.FC<PlayViewProps> = ({
   useEffect(() => {
     window.electronAPI.onAuthChanged(() => { checkAuth(); });
     return () => window.electronAPI.removeAuthChangedListeners();
+  }, []);
+
+  // Live Server Pulse — poll the SMP's status on mount and every 30s. The
+  // pinger lives in the main process (SLP over a raw socket); failures come
+  // back as { online: false }, never as a throw, so the UI just degrades to
+  // the offline line. The ping targets the built-in SMP host; a world's
+  // assigned-server host would need its own wiring later.
+  useEffect(() => {
+    const fetchStatus = async () => {
+      try {
+        const status = await window.electronAPI.pingServer(SERVER_HOST, 25565);
+        setServerStatus(status);
+      } catch { setServerStatus({ online: false }); }
+    };
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 30000);
+    return () => clearInterval(interval);
   }, []);
 
   // Outside-click + Escape close the switcher. Owning this at the eyebrow
@@ -413,6 +431,19 @@ const PlayView: React.FC<PlayViewProps> = ({
         >
           {sub}
         </p>
+
+        {/* Live Server Pulse — the place's heartbeat. Hidden until the first
+            probe lands so the dot never presents a state nobody measured. */}
+        {serverStatus && (
+          <div className="rise d3 mt-2 flex items-center justify-center gap-2 text-[12px] text-faint">
+            <span className={`inline-block h-1.5 w-1.5 rounded-full ${serverStatus.online ? 'bg-ember animate-pulse' : 'bg-faint'}`} />
+            {serverStatus.online ? (
+              <span>{serverStatus.players?.online || 0} / {serverStatus.players?.max || 0} players online</span>
+            ) : (
+              <span>Your world has been waiting.</span>
+            )}
+          </div>
+        )}
 
         {/* The flame — exactly one ember element (Law 1) */}
         <div className="rise d3 mt-5 flex flex-col items-center">

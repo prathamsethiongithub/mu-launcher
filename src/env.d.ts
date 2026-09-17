@@ -10,6 +10,16 @@ declare global {
   }
 }
 
+/** One file in a world's mods/ directory, as returned by listMods. */
+interface ModFileEntry {
+  /** Canonical (enabled-form) filename, e.g. "sodium.jar". */
+  filename: string;
+  /** Filename minus its extension(s), e.g. "sodium". */
+  displayName: string;
+  size: number;
+  enabled: boolean;
+}
+
 interface ElectronAPI {
   getAppVersion: () => Promise<string>;
   openExternalLink: (url: string) => Promise<void>;
@@ -68,6 +78,10 @@ interface ElectronAPI {
     kind: 'minecraft' | 'fabric' | 'quilt'
   ) => Promise<{ success: boolean; versions?: string[]; error?: string }>;
 
+  /** Live Server Pulse: query a Minecraft server's online status. */
+  pingServer: (host: string, port: number) =>
+    Promise<{ online: boolean; players?: { online: number; max: number }; version?: string; motd?: string }>;
+
   /** Open a native folder picker; resolves to the chosen path, or null on cancel. */
   selectDirectory: () => Promise<string | null>;
 
@@ -84,7 +98,7 @@ interface ElectronAPI {
     }>;
 
   /** Create a new personal world. */
-  createWorld: (spec: { name: string; version: string; loader: string; loaderVersion?: string; ramAllocation?: number; settingsPath?: string }) =>
+  createWorld: (spec: { name: string; version: string; loader: string; loaderVersion?: string; ramAllocation?: number; settingsPath?: string; modpackPath?: string }) =>
     Promise<{ success: boolean; world?: World; error?: string }>;
 
   /** Returns all worlds from the registry. */
@@ -122,6 +136,29 @@ interface ElectronAPI {
   verifyBackup: (worldId: string, backupName: string) => Promise<{ success: boolean; verified: boolean; error?: string }>;
   /** Delete a backup. */
   deleteBackup: (worldId: string, backupName: string) => Promise<{ success: boolean; error?: string }>;
+
+  // ── Mod Management ──
+  /** List the mod files in a world's mods/ directory. */
+  listMods: (worldId: string) => Promise<ModFileEntry[]>;
+  /** Enable or disable a mod (renamed in place). */
+  toggleMod: (worldId: string, filename: string, enable: boolean) => Promise<{ success: boolean; error?: string }>;
+  /** Delete a mod file from the world's mods/ directory. */
+  deleteMod: (worldId: string, filename: string) => Promise<{ success: boolean; error?: string }>;
+  /** Copy a .jar from disk into the world's mods/ directory. */
+  addMod: (worldId: string, sourceFilePath: string) => Promise<{ success: boolean; error?: string }>;
+  /** Native file picker for a mod .jar; resolves to the path or null on cancel. */
+  selectModFile: () => Promise<string | null>;
+
+  // ── Modrinth Discover ──
+  /** Search Modrinth for mods (game-version/loader facets applied in main). */
+  searchModrinth: (
+    query: string,
+    gameVersion?: string,
+    loader?: string
+  ) => Promise<{ id: string; title: string; description: string; author: string; downloads: number; iconUrl?: string }[]>;
+  /** Install a Modrinth project's latest version into a world's mods/ directory. */
+  downloadMod: (worldId: string, projectId: string) =>
+    Promise<{ success: boolean; error?: string; filename?: string }>;
 
   // ── Identity Management ──
   getAccounts: () => Promise<(Account & { hasSession: boolean })[]>;
