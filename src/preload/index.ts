@@ -266,7 +266,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   /** Native file picker for a mod .jar; resolves to the path or null on cancel. */
   selectModFile: () => ipcRenderer.invoke('select-mod-file') as Promise<string | null>,
 
-  // ── Modrinth Discover ────────────────────────────────────────────────
+  // ── Modrinth Discover ──────────────────────────────────────────────── ──
 
   /** Search Modrinth for mods (game-version/loader facets applied in main). */
   searchModrinth: (query: string, gameVersion?: string, loader?: string) =>

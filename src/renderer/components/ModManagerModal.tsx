@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import ModrinthBrowser from './ModrinthBrowser';
 
 interface ModManagerModalProps {
   worldId: string;
@@ -38,6 +39,10 @@ const ModManagerModal: React.FC<ModManagerModalProps> = ({ worldId, worldName, o
   const [busy, setBusy] = useState<Busy>(null);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Modrinth browser state + the world's version/loader (the browser filters
+  // search results and downloads by both).
+  const [modrinthOpen, setModrinthOpen] = useState(false);
+  const [worldInfo, setWorldInfo] = useState<{ version: string; loader: string } | null>(null);
 
   const loadMods = useCallback(async () => {
     setLoadFailed(false);
@@ -111,6 +116,20 @@ const ModManagerModal: React.FC<ModManagerModalProps> = ({ worldId, worldName, o
     } finally {
       setAdding(false);
       loadMods();
+    }
+  };
+
+  // Opens the Modrinth browser: resolves the world's version/loader once so
+  // the search facets target THIS world's MC version and loader.
+  const openModrinth = async (): Promise<void> => {
+    setModrinthOpen(true);
+    if (worldInfo) return;
+    try {
+      const worlds = await window.electronAPI.getWorlds();
+      const world = (worlds || []).find((w) => w.id === worldId);
+      if (world) setWorldInfo({ version: world.version, loader: world.loader });
+    } catch {
+      // The browser still opens — the search just runs unfiltered.
     }
   };
 
@@ -230,14 +249,35 @@ const ModManagerModal: React.FC<ModManagerModalProps> = ({ worldId, worldName, o
           <button className="pill-ghost" onClick={onClose}>
             Done
           </button>
-          <button
-            className="pill-ghost !border-ember/30 !text-ember hover:!border-ember/60 hover:!text-ember"
-            onClick={handleAdd}
-            disabled={adding || busy !== null}
-          >
-            {adding ? 'Adding…' : 'Add Mod'}
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              className="pill-ghost !border-ember/30 !text-ember hover:!border-ember/60 hover:!text-ember"
+              onClick={openModrinth}
+            >
+              Browse Modrinth
+            </button>
+            <button
+              className="pill-ghost !border-ember/30 !text-ember hover:!border-ember/60 hover:!text-ember"
+              onClick={handleAdd}
+              disabled={adding || busy !== null}
+            >
+              {adding ? 'Adding…' : 'Add Mod'}
+            </button>
+          </div>
         </div>
+
+        {/* Modrinth browser — overlays the whole manager (fixed root): installs
+            land in the same world the manager targets, and onInstalled re-pulls
+            the list so the manager reflects the install immediately. */}
+        {modrinthOpen && worldInfo && (
+          <ModrinthBrowser
+            worldId={worldId}
+            worldVersion={worldInfo.version}
+            worldLoader={worldInfo.loader}
+            onClose={() => setModrinthOpen(false)}
+            onInstalled={loadMods}
+          />
+        )}
       </div>
     </div>
   );

@@ -343,3 +343,29 @@ body {
   .hearth { animation: none; opacity: 0.7; }
   .rise { opacity: 1; animation: none; }
 }
+
+/* Premium Range Slider */
+input[type="range"].mu-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  outline: none;
+}
+input[type="range"].mu-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ember, #C88735);
+  cursor: pointer;
+  border: 2px solid #0b0a09;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.1);
+  transition: transform 0.15s ease;
+}
+input[type="range"].mu-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.2);
+}

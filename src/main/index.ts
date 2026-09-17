@@ -849,6 +849,30 @@ function registerIpcHandlers(): void {
   });
 
   /**
+   * 'mod-download' — Downloads the newest compatible build of a Modrinth
+   * project into a world's mods/ directory. The world's game version and
+   * loader are applied as a compatibility filter (a Fabric world must get
+   * the Fabric build, not NeoForge). Resolves to { success, filename } or
+   * { success: false, error }.
+   */
+  ipcMain.handle('mod-download', async (_event, worldId: string, projectId: string) => {
+    if (!worldManager) return { success: false, error: 'World system not initialized.' };
+    const world = worldManager.getWorlds().find((w) => w.id === worldId);
+    if (!world) return { success: false, error: 'World not found.' };
+    if (!projectId) return { success: false, error: 'No Modrinth project ID provided.' };
+    try {
+      const { downloadModFromModrinth } = await import('./mod-downloader');
+      const root = worldManager.resolveRoot(world);
+      return await downloadModFromModrinth(root, projectId, undefined, {
+        gameVersion: world.version,
+        loader: world.loader !== 'vanilla' ? world.loader : undefined,
+      });
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  /**
    * 'select-mod-file' — Native file picker for a mod .jar, used by the Mod
    * Manager's "Add Mod". Kept separate from 'select-directory' (folders) and
    * 'select-skin-file' (validated PNGs) so each picker owns its filters.

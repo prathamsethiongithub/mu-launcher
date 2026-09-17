@@ -145,22 +145,24 @@ const PlayView: React.FC<PlayViewProps> = ({
     return () => window.electronAPI.removeAuthChangedListeners();
   }, []);
 
-  // Live Server Pulse — poll the SMP's status on mount and every 30s. The
-  // pinger lives in the main process (SLP over a raw socket); failures come
-  // back as { online: false }, never as a throw, so the UI just degrades to
-  // the offline line. The ping targets the built-in SMP host; a world's
-  // assigned-server host would need its own wiring later.
+  // Live Server Pulse — poll status on mount and every 30s. The pinger
+  // lives in the main process (SLP over a raw socket); failures come back
+  // as { online: false }, never as a throw, so the UI just degrades to
+  // the offline line. The target follows the active world's assigned
+  // server when one exists, falling back to the built-in SMP host.
   useEffect(() => {
     const fetchStatus = async () => {
       try {
-        const status = await window.electronAPI.pingServer(SERVER_HOST, 25565);
+        const host = activeWorld?.assignedServer?.ip || SERVER_HOST;
+        const port = activeWorld?.assignedServer?.port || 25565;
+        const status = await window.electronAPI.pingServer(host, port);
         setServerStatus(status);
       } catch { setServerStatus({ online: false }); }
     };
     fetchStatus();
     const interval = setInterval(fetchStatus, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [activeWorld]);
 
   // Outside-click + Escape close the switcher. Owning this at the eyebrow
   // wrapper — which contains BOTH the trigger and the popover — is what makes

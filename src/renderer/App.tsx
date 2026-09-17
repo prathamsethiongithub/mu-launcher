@@ -4,7 +4,7 @@ import PlayView from './components/PlayView';
 import WorldsView from './components/WorldsView';
 import IdentityView from './components/IdentityView';
 import { LaunchStep } from './components/ForgeLine';
-import SettingsView from './components/SettingsView';
+import { SetupView } from './components/SetupView';
 import DockNav from './components/DockNav';
 
 export type View = 'auth' | 'play' | 'worlds' | 'settings';
@@ -361,7 +361,7 @@ function App() {
         />
       </div>
       <div className="h-full" style={{ display: currentView === 'settings' ? 'block' : 'none' }}>
-        <SettingsView activeWorld={activeWorld} onWorldsChanged={loadWorlds} />
+        <SetupView activeWorld={activeWorld} onWorldsChanged={loadWorlds} />
       </div>
     </>
   );

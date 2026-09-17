@@ -35,6 +35,8 @@ interface ModrinthVersion {
   id: string;
   version_number?: string;
   files?: ModrinthVersionFile[];
+  game_versions?: string[];
+  loaders?: string[];
 }
 
 /** Same traversal guard as mod-manager: a remote filename is still a filename. */
@@ -124,6 +126,11 @@ export async function searchModrinthMods(
  * @param worldRootPath  Absolute game-root of the target world.
  * @param projectId      Modrinth project ID or slug (e.g. "AANobbMI" for Sodium).
  * @param versionId      Optional version UUID or version number; omit for latest.
+ * @param filter         Optional world compatibility filter. When provided, the
+ *                       newest build matching the world's game version AND
+ *                       loader is selected (Sodium's latest is NeoForge-only —
+ *                       a Fabric world must get the Fabric build). An explicit
+ *                       versionId overrides the filter.
  * @returns `{ success: true, filename }` with the on-disk mod filename, or
  *          `{ success: false, error }` for ANY failure. Never throws.
  */
@@ -131,6 +138,7 @@ export async function downloadModFromModrinth(
   worldRootPath: string,
   projectId: string,
   versionId?: string,
+  filter?: { gameVersion?: string; loader?: string },
 ): Promise<{ success: boolean; error?: string; filename?: string }> {
   try {
     if (!projectId || typeof projectId !== 'string') {
@@ -155,10 +163,27 @@ export async function downloadModFromModrinth(
 
     // ── 2. pick the requested version, else the newest ──
     // Match on either the version UUID or the human version number — callers
-    // naturally pass the string they saw on the website.
-    const version = versionId
-      ? versions.find((v) => v.id === versionId || v.version_number === versionId)
-      : versions[0];
+    // naturally pass the string they saw on the website. With a world filter,
+    // only builds matching the world's game version AND loader qualify
+    // (installing a NeoForge build into a Fabric world would never load).
+    let version: ModrinthVersion | undefined;
+    if (versionId) {
+      version = versions.find((v) => v.id === versionId || v.version_number === versionId);
+    } else if (filter?.gameVersion || filter?.loader) {
+      const pool = versions.filter(
+        (v) =>
+          (!filter.gameVersion || (v.game_versions || []).includes(filter.gameVersion)) &&
+          (!filter.loader || (v.loaders || []).includes(filter.loader)),
+      );
+      if (pool.length === 0) {
+        throw new Error(
+          `No ${filter.loader || 'Minecraft'} ${filter.gameVersion || ''} build of "${projectId}" on Modrinth.`.replace(/ {2}/g, ' '),
+        );
+      }
+      version = pool[0];
+    } else {
+      version = versions[0];
+    }
     if (!version) {
       const known = versions
         .slice(0, 5)
