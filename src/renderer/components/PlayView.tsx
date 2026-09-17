@@ -254,14 +254,14 @@ const PlayView: React.FC<PlayViewProps> = ({
           speed={3.7}
           rayColor1="#E6A55C"
           rayColor2="#C88735"
-          intensity={1.3}
+          intensity={0.8}
           spread={0.6}
           origin="top-right"
           tilt={45}
           saturation={2}
           blend={0.75}
           falloff={4}
-          opacity={0.8}
+          opacity={0.4}
         />
       </div>
 

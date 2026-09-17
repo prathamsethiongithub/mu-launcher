@@ -6,7 +6,7 @@ import { AuthService } from './auth-service';
 import { JavaProvisioner } from './java-provisioner';
 import { LaunchManager, StepChangeCallback } from './launch-service';
 import { ServerInjector } from './server-injector';
-import { validateExternalUrl } from '../security/ipc-validate';
+import { validateExternalUrl, validatePath } from '../security/ipc-validate';
 import { runPreflightCheck } from './preflight-check';
 import { SkinService } from './skin-service';
 import { WorldManager } from './world-manager';
@@ -46,7 +46,7 @@ function createWindow(): void {
     icon: join(__dirname, '../../build/icon.ico'),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
-      sandbox: false,
+      sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -360,6 +360,15 @@ function registerIpcHandlers(): void {
    * Sends 'launch-step' events to the renderer for progress tracking.
    */
   ipcMain.handle('launch-game', async (_event, javaPath: string) => {
+    // Arbitrary-execution guard: javaPath originates in the renderer and is
+    // ultimately handed to child_process. validatePath() throws on unsafe
+    // characters (shell metacharacters / injection attempts).
+    try {
+      validatePath(javaPath);
+    } catch {
+      return { success: false, error: '[E608] Invalid Java path' };
+    }
+
     // Guard against double-launch. The renderer also hides Play during a
     // launch, but this is the authoritative backstop at the IPC layer:
     //  - launchInProgress: a launch is currently orchestrating (Play spam).

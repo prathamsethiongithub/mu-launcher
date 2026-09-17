@@ -343,8 +343,9 @@ export class AuthService {
         writeFileSync(filePath, encrypted);
         console.log('[auth] Session persisted (encrypted)');
       } else {
-        writeFileSync(filePath, json, 'utf-8');
-        console.log('[auth] Session persisted (unencrypted)');
+        // Security: never fall back to plaintext. Tokens on disk unencrypted
+        // are a real risk — better to skip persistence entirely.
+        console.warn('[auth] safeStorage unavailable, session will not persist');
       }
     } catch (err) {
       console.error('[auth] Failed to persist session:', err);

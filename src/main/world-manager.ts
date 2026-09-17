@@ -449,6 +449,11 @@ export class WorldManager {
     const world = this.registry.worlds.find((w) => w.id === worldId);
     if (!world) return { success: false, error: 'World not found.' };
 
+    // Path-traversal guard: backupName comes from the renderer. Reject
+    // traversal or path separators before it can escape the backups dir.
+    if (backupName.includes('..') || backupName.includes('/') || backupName.includes('\\')) {
+      throw new Error('Invalid backup name');
+    }
     const root = this.resolveRoot(world);
     const backupDir = join(root, '..', 'backups');
     const backupPath = join(backupDir, backupName);
@@ -566,6 +571,10 @@ export class WorldManager {
     const world = this.registry.worlds.find((w) => w.id === worldId);
     if (!world) return { success: false, error: 'World not found.' };
 
+    // Path-traversal guard (same rule as restoreWorld).
+    if (backupName.includes('..') || backupName.includes('/') || backupName.includes('\\')) {
+      throw new Error('Invalid backup name');
+    }
     const backupDir = join(this.resolveRoot(world), '..', 'backups');
     const backupPath = join(backupDir, backupName);
 
