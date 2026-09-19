@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
 import { join } from 'path';
-import { readFileSync, statSync } from 'fs';
+import { readFileSync, statSync, rmSync } from 'fs';
+import { readdir, stat } from 'fs/promises';
 import { is } from '@electron-toolkit/utils';
 import { AuthService } from './auth-service';
 import { JavaProvisioner } from './java-provisioner';
@@ -337,9 +338,77 @@ async function resolveLaunchAuthorization(): Promise<
 }
 
 // Register IPC handlers
+/**
+ * Recursively sum file sizes under dirPath (bytes).
+ * Async (fs/promises): the walk hops to the libuv threadpool so large data
+ * directories never block the main process. Same pattern as WorldManager's
+ * dirSize — a missing or unreadable path contributes 0, never a throw.
+ */
+async function dirSizeBytes(dirPath: string): Promise<number> {
+  let st;
+  try {
+    st = await stat(dirPath);
+  } catch {
+    return 0;
+  }
+  if (!st.isDirectory()) return st.size;
+  let entries;
+  try {
+    entries = await readdir(dirPath, { withFileTypes: true });
+  } catch {
+    return 0;
+  }
+  let total = 0;
+  for (const entry of entries) {
+    total += await dirSizeBytes(join(dirPath, entry.name));
+  }
+  return total;
+}
+
 function registerIpcHandlers(): void {
   ipcMain.handle('get-app-version', () => {
     return app.getVersion();
+  });
+
+  // ── App Storage & Cache (Setup screen) ────────────────────────────────
+  // These three handlers replace SetupView's fake controls (console.log
+  // buttons + a hardcoded "2.3 GB" figure). clear-cache's scope guard is
+  // deliberate and absolute: ONLY refetchable caches are ever deleted —
+  // worlds/, identity.json, identity-tokens.bin, auth-session.bin and
+  // worlds.json are user data and MUST never be touched here.
+
+  ipcMain.handle('open-app-data-dir', async () => {
+    try {
+      // shell.openPath resolves with an error STRING on failure, '' on success.
+      const err = await shell.openPath(app.getPath('userData'));
+      return err ? { success: false, error: err } : { success: true };
+    } catch (err) {
+      return { success: false, error: String(err) };
+    }
+  });
+
+  ipcMain.handle('get-app-metrics', async () => {
+    const userDataPath = app.getPath('userData');
+    const bytes = await dirSizeBytes(userDataPath);
+    return { path: userDataPath, bytes };
+  });
+
+  ipcMain.handle('clear-cache', async () => {
+    const targets = [
+      join(app.getPath('userData'), 'skins'), // SkinService 24h cache — refetched on demand
+      join(app.getPath('userData'), 'minecraft', 'cache'), // MCLC download cache — re-downloaded at launch
+    ];
+    let bytesCleared = 0;
+    try {
+      for (const dir of targets) {
+        bytesCleared += await dirSizeBytes(dir);
+        rmSync(dir, { recursive: true, force: true });
+      }
+      return { success: true, bytesCleared };
+    } catch (err) {
+      console.error('[clear-cache] failed:', err);
+      return { success: false, error: String(err), bytesCleared };
+    }
   });
 
   ipcMain.handle('open-external-link', (_event, url: string) => {
@@ -660,7 +729,16 @@ function registerIpcHandlers(): void {
       // hardcoded default. Falls back to 4096 only if the registry value is
       // somehow missing.
       const maxRam = String(activeWorld.ramAllocation || 4096);
-      await launchManager.launchWithFabric(auth, javaPath, { maxRam, minRam: '1024' }, mcRoot);
+      // Resolution: the Setup screen's persisted "WxH" value drives the
+      // game window flags via MCLC's `window` option. Absent or malformed →
+      // no flags, the game uses its own default size.
+      let windowOption: { width: number; height: number } | undefined;
+      const savedRes = activeWorld.resolution;
+      if (savedRes) {
+        const m = /^(\d{2,5})x(\d{2,5})$/.exec(savedRes);
+        if (m) windowOption = { width: Number(m[1]), height: Number(m[2]) };
+      }
+      await launchManager.launchWithFabric(auth, javaPath, { maxRam, minRam: '1024', window: windowOption }, mcRoot);
       return { success: true };
     } catch (error) {
       console.error('[ipc-launch-error]', error);
@@ -876,6 +954,7 @@ function registerIpcHandlers(): void {
    */
   ipcMain.handle('update-world-settings', async (_event, worldId: string, settings: {
     ramAllocation?: number;
+    resolution?: string;
   }) => {
     if (!worldManager) return { success: false, error: 'World system not initialized.' };
     return worldManager.updateWorldSettings(worldId, settings);

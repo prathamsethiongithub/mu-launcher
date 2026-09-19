@@ -1,8 +1,11 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 // SetupView — per-instance configuration (memory, runtime, resolution) plus
-// storage housekeeping and build info. Java "Detect" is wired to the main
-// process; Open Folder / Clear Cache still log to console.
+// storage housekeeping and build info. Every interactive control here performs
+// a real action: RAM/resolution persist through 'update-world-settings',
+// Open Folder opens the launcher's real data directory, Disk Usage reads live
+// bytes from the main process, and Clear Cache deletes only refetchable
+// cache directories (worlds/identity/tokens are never touched).
 export const SetupView: React.FC<{ activeWorld: any; onWorldsChanged: () => void }> = ({
   activeWorld,
   onWorldsChanged,
@@ -12,9 +15,63 @@ export const SetupView: React.FC<{ activeWorld: any; onWorldsChanged: () => void
   // timer survives re-renders: a per-render `let` resets to undefined and
   // every drag tick would leak a live timer (N ticks → N IPC calls).
   const ramTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [resolution, setResolution] = useState('1920x1080');
+  // Resolution comes from the world registry so it survives restarts;
+  // '1920x1080' is only the pre-selection shown before the user ever changes it.
+  const [resolution, setResolution] = useState<string>(activeWorld?.resolution || '1920x1080');
   const [cacheConfirm, setCacheConfirm] = useState(false);
+  const [cacheBusy, setCacheBusy] = useState(false);
   const [javaPath, setJavaPath] = useState('');
+  // Real storage metrics from the main process — replaces the old hardcoded
+  // "2.3 GB on disk" figure and the fake C:\Users\Player\... path.
+  const [storage, setStorage] = useState<{ path: string; bytes: number } | null>(null);
+
+  const refreshMetrics = async () => {
+    try {
+      setStorage(await window.electronAPI.getAppMetrics());
+    } catch (err) {
+      console.error('[setup] get-app-metrics failed:', err);
+    }
+  };
+
+  useEffect(() => {
+    refreshMetrics();
+  }, []);
+
+  /** Human-readable byte count, e.g. 2483523584 → "2.3 GB". */
+  const formatBytes = (bytes: number): string => {
+    if (!Number.isFinite(bytes) || bytes < 0) return '—';
+    if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+    if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${bytes} B`;
+  };
+
+  const handleOpenFolder = async () => {
+    const result = await window.electronAPI.openAppDataDir();
+    if (!result.success) {
+      console.error('[setup] open-app-data-dir failed:', result.error);
+    }
+  };
+
+  const handleClearCache = async () => {
+    if (cacheBusy) return;
+    if (!cacheConfirm) {
+      setCacheConfirm(true);
+      return;
+    }
+    setCacheBusy(true);
+    try {
+      const result = await window.electronAPI.clearCache();
+      if (!result.success) {
+        console.error('[setup] clear-cache failed:', result.error);
+      }
+      // The usage figure must reflect what was just deleted.
+      await refreshMetrics();
+    } finally {
+      setCacheBusy(false);
+      setCacheConfirm(false);
+    }
+  };
 
   return (
     <div className="relative z-[1] flex h-full flex-col items-center justify-center px-10 pt-20 pb-24 pointer-events-none">
@@ -81,7 +138,15 @@ export const SetupView: React.FC<{ activeWorld: any; onWorldsChanged: () => void
             <span className="text-[14px] text-dim">Game Resolution</span>
             <select
               value={resolution}
-              onChange={(e) => setResolution(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setResolution(next);
+                // Persist through the same channel as RAM so the value
+                // survives restarts and reaches MCLC's `window` option at launch.
+                if (activeWorld) {
+                  window.electronAPI.updateWorldSettings(activeWorld.id, { resolution: next });
+                }
+              }}
               className="rounded-[8px] border border-white/[0.06] bg-white/[0.03] px-3 py-2 text-[12px] text-dim focus:border-ember/30 focus:outline-none"
             >
               <option value="1280x720">1280 x 720</option>
@@ -99,12 +164,12 @@ export const SetupView: React.FC<{ activeWorld: any; onWorldsChanged: () => void
           <div className="flex items-center justify-between">
             <div className="flex flex-col gap-1">
               <span className="text-[14px] text-dim">Game Directory</span>
-              <span className="text-[11px] text-faint truncate max-w-[300px]">
-                C:\Users\Player\AppData\Roaming\mu-master-launcher
+              <span className="text-[11px] text-faint truncate max-w-[300px]" title={storage?.path}>
+                {storage ? storage.path : '…'}
               </span>
             </div>
             <button
-              onClick={() => console.log('open dir')}
+              onClick={handleOpenFolder}
               className="pill-ghost !text-[11px] !px-3 !py-1"
             >
               Open Folder
@@ -117,21 +182,16 @@ export const SetupView: React.FC<{ activeWorld: any; onWorldsChanged: () => void
           <div className="mt-6 flex items-center justify-between">
             <span className="text-[14px] text-dim">Disk Usage</span>
             <div className="flex items-center gap-3">
-              <span className="font-mono text-[12px] text-faint">2.3 GB on disk</span>
+              <span className="font-mono text-[12px] text-faint">
+                {storage ? `${formatBytes(storage.bytes)} on disk` : '…'}
+              </span>
               <button
-                onClick={() => {
-                  if (cacheConfirm) {
-                    console.log('cache cleared');
-                    setCacheConfirm(false);
-                  } else {
-                    setCacheConfirm(true);
-                  }
-                }}
+                onClick={handleClearCache}
                 className={`ml-auto text-[12px] transition-colors duration-micro ${
                   cacheConfirm ? 'text-danger' : 'text-faint hover:text-danger'
                 }`}
               >
-                {cacheConfirm ? 'Sure? Click again' : 'Clear Cache'}
+                {cacheConfirm ? 'Sure? Click again' : cacheBusy ? 'Clearing…' : 'Clear Cache'}
               </button>
             </div>
           </div>

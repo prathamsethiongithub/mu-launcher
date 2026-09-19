@@ -112,11 +112,17 @@ interface ElectronAPI {
 
   /** Rename a world. */
   renameWorld: (worldId: string, newName: string) => Promise<{ success: boolean; error?: string }>;
-  /** Update editable per-world settings (RAM allocation in MB). */
+  /** Update editable per-world settings (RAM allocation in MB, game resolution as "WxH"). */
   updateWorldSettings: (
     worldId: string,
-    settings: { ramAllocation?: number }
+    settings: { ramAllocation?: number; resolution?: string }
   ) => Promise<{ success: boolean; world?: World; error?: string }>;
+  /** Open the launcher's data directory in the OS file explorer. */
+  openAppDataDir: () => Promise<{ success: boolean; error?: string }>;
+  /** Real disk usage of the launcher data directory (bytes). */
+  getAppMetrics: () => Promise<{ path: string; bytes: number }>;
+  /** Clear refetchable caches only (skins/, minecraft/cache) — never user data. */
+  clearCache: () => Promise<{ success: boolean; error?: string; bytesCleared: number }>;
   /** Delete a personal world. */
   deleteWorld: (worldId: string) => Promise<{ success: boolean; error?: string }>;
   /** Duplicate a world. */

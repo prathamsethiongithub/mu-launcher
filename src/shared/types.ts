@@ -94,6 +94,8 @@ export interface World {
   mods: WorldMod[];
   resourcePacks: WorldResourcePack[];
   ramAllocation: number;
+  /** Game window resolution persisted from Setup as "WxH" (e.g. "1920x1080"); null = launcher never sets window flags. */
+  resolution: string | null;
   /** null = use global provisioned JRE */
   javaPath: string | null;
   iconPath: string | null;

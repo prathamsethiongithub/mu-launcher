@@ -198,9 +198,21 @@ contextBridge.exposeInMainWorld('electronAPI', {
   renameWorld: (worldId: string, newName: string) =>
     ipcRenderer.invoke('rename-world', worldId, newName),
 
-  /** Update editable per-world settings (RAM allocation). */
-  updateWorldSettings: (worldId: string, settings: { ramAllocation?: number }) =>
+  /** Update editable per-world settings (RAM allocation, game resolution). */
+  updateWorldSettings: (worldId: string, settings: { ramAllocation?: number; resolution?: string }) =>
     ipcRenderer.invoke('update-world-settings', worldId, settings),
+
+  /** Open the launcher's data directory in the OS file explorer (Setup screen). */
+  openAppDataDir: () =>
+    ipcRenderer.invoke('open-app-data-dir') as Promise<{ success: boolean; error?: string }>,
+
+  /** Real disk usage of the launcher data directory (Setup screen). */
+  getAppMetrics: () =>
+    ipcRenderer.invoke('get-app-metrics') as Promise<{ path: string; bytes: number }>,
+
+  /** Clear refetchable caches only (skins/, minecraft/cache) — never user data. */
+  clearCache: () =>
+    ipcRenderer.invoke('clear-cache') as Promise<{ success: boolean; error?: string; bytesCleared: number }>,
 
   /** Delete a personal world. */
   deleteWorld: (worldId: string) =>

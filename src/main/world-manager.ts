@@ -225,6 +225,7 @@ export class WorldManager {
       mods: [] as WorldMod[],
       resourcePacks: [] as WorldResourcePack[],
       ramAllocation: spec.ramAllocation || 4096,
+      resolution: null,
       javaPath: null,
       iconPath: null,
       createdAt: Date.now(),
@@ -271,7 +272,7 @@ export class WorldManager {
    */
   updateWorldSettings(
     worldId: string,
-    settings: { ramAllocation?: number }
+    settings: { ramAllocation?: number; resolution?: string }
   ): { success: boolean; world?: World; error?: string } {
     const world = this.registry.worlds.find((w) => w.id === worldId);
     if (!world) return { success: false, error: 'World not found.' };
@@ -284,6 +285,16 @@ export class WorldManager {
         return { success: false, error: 'RAM must be between 1024 MB and 16384 MB.' };
       }
       world.ramAllocation = ram;
+    }
+
+    if (settings.resolution !== undefined) {
+      if (settings.resolution === null) {
+        world.resolution = null;
+      } else if (/^\d{2,5}x\d{2,5}$/.test(settings.resolution)) {
+        world.resolution = settings.resolution;
+      } else {
+        return { success: false, error: 'Resolution must be in "WxH" form (e.g. 1920x1080).' };
+      }
     }
 
     this.save();
@@ -784,6 +795,7 @@ export class WorldManager {
       mods: [],
       resourcePacks: [],
       ramAllocation: MANAGED_WORLD_CONFIG.ramAllocation,
+      resolution: null,
       javaPath: null,
       iconPath: null,
       createdAt: hasExistingInstall ? 0 : Date.now(),
@@ -836,6 +848,7 @@ export class WorldManager {
         mods: [],
         resourcePacks: [],
         ramAllocation: MANAGED_WORLD_CONFIG.ramAllocation,
+      resolution: null,
         javaPath: null,
         iconPath: null,
         createdAt: 0,

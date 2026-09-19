@@ -208,7 +208,7 @@ export class LaunchManager {
   async launchWithFabric(
     auth: { access_token: string; uuid: string; name: string },
     javaPath: string,
-    options?: { maxRam?: string; minRam?: string },
+    options?: { maxRam?: string; minRam?: string; window?: { width: number; height: number } },
     rootOverride?: string          // ← NEW: if set, overrides the default minecraft root
   ): Promise<void> {
     this._cancelled = false;
@@ -278,6 +278,7 @@ export class LaunchManager {
           max: options?.maxRam || '4096',
           min: options?.minRam || '1024'
         },
+        window: options?.window,
         javaPath: javaPath,
         overrides: {
           detached: false,
