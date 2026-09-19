@@ -1,5 +1,12 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import SkinViewerCanvas from './fx/SkinViewerCanvas';
+import { playEquipSwell, playSelectTick } from '../studio-audio';
+import {
+  classifyStudioVisit,
+  formatWearingSince,
+  hasReturnedAfterAbsence,
+  isFirstSkin,
+} from '../../shared/studio-ritual';
 
 /**
  * Identity Studio — the player's private skin wardrobe.
@@ -41,6 +48,10 @@ const toViewerModel = (variant: 'classic' | 'slim'): 'default' | 'slim' =>
   variant === 'slim' ? 'slim' : 'default';
 
 const DRAG_HINT_KEY = 'identity-studio-drag-hint-done';
+const VISIT_KEY = 'identity-studio-last-visit';
+const VISIT_LOG_KEY = 'identity-studio-visit-log';
+/** Stage 1 module-session flag — the Mirror Moment fires once per app run. */
+let mirrorShownThisSession = false;
 
 /** 2D head crop for shelf cards — canvas 2D, never a three.js instance. */
 const SkinHead: React.FC<{ dataUrl: string | null; size?: number }> = ({ dataUrl, size = 56 }) => {
@@ -97,6 +108,13 @@ const IdentityView: React.FC = () => {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [duplicateMsg, setDuplicateMsg] = useState<string | null>(null);
   const [showDragHint, setShowDragHint] = useState(false);
+  // ── euphoria stage 1 ──────────────────────────────────────────────────
+  const [mirrorEpoch, setMirrorEpoch] = useState(0); // remount → GREETING wave
+  const [mirrorLine, setMirrorLine] = useState<string | null>(null);
+  const [firstSkinMsg, setFirstSkinMsg] = useState<string | null>(null);
+  const [firstInId, setFirstInId] = useState<string | null>(null);
+  /** Pleasure sensor: actions recorded this visit, classified on unmount. */
+  const sensorActionsRef = useRef<string[]>([]);
 
   const activeAccount = accounts.find((a) => a.id === activeAccountId);
   const isMsActive = activeAccount?.type === 'microsoft';
@@ -163,6 +181,44 @@ const IdentityView: React.FC = () => {
   // Drag-rotate hint: shown once per machine, gone after the first drag.
   useEffect(() => {
     try { setShowDragHint(!localStorage.getItem(DRAG_HINT_KEY)); } catch { setShowDragHint(false); }
+  }, []);
+
+  // ── Mirror Moment + visit bookkeeping (Stage 1) ───────────────────────
+  // Runs once per mount: gate the greeting on the pure function, stamp the
+  // visit, and leave the sensor to classify on unmount.
+  useEffect(() => {
+    const now = Date.now();
+    let last: number | null = null;
+    try {
+      const raw = localStorage.getItem(VISIT_KEY);
+      const parsed = raw === null ? NaN : Number(raw);
+      last = Number.isNaN(parsed) ? null : parsed;
+    } catch {
+      last = null;
+    }
+    if (hasReturnedAfterAbsence(last, now, mirrorShownThisSession)) {
+      mirrorShownThisSession = true;
+      setMirrorEpoch((e) => e + 1); // remount hero → the same GREETING wave equip uses
+      setMirrorLine(`hey, ${activeAccount?.username.toLowerCase() ?? 'you'}.`);
+      setTimeout(() => setMirrorLine(null), 5000);
+    }
+    try { localStorage.setItem(VISIT_KEY, String(now)); } catch { /* private mode */ }
+    // The pleasure sensor: classify this visit's actions and file it locally.
+    const actions = sensorActionsRef.current;
+    return () => {
+      try {
+        const log = JSON.parse(localStorage.getItem(VISIT_LOG_KEY) ?? '[]') as
+          { ts: number; kind: string }[];
+        log.push({ ts: Date.now(), kind: classifyStudioVisit(actions) });
+        localStorage.setItem(VISIT_LOG_KEY, JSON.stringify(log.slice(-200)));
+      } catch { /* never let the sensor break the studio */ }
+      actions.length = 0;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const recordAction = useCallback((action: string) => {
+    sensorActionsRef.current.push(action);
   }, []);
   const handleOrbitStart = useCallback(() => {
     setShowDragHint(false);
@@ -244,12 +300,14 @@ const IdentityView: React.FC = () => {
       return;
     }
     // The chosen path is held in the main process — import consumes it there.
+    const beforeCount = skins.length;
     const result = await window.electronAPI.skinsImport();
     if (!result.success) {
       setDuplicateMsg(result.error || 'Could not add that skin.');
       return;
     }
     await loadSkins();
+    recordAction('import');
     if (result.duplicate && result.message) {
       setDuplicateMsg(result.message);
       return;
@@ -257,19 +315,35 @@ const IdentityView: React.FC = () => {
     if (result.skin) {
       setPreviewId(result.skin.id);
       setDuplicateMsg(null);
+      announceIfFirstSkin(beforeCount, result.skin);
     }
   };
 
   const handleSaveCurrent = async () => {
     if (!activeAccountId) return;
     setDuplicateMsg(null);
+    const beforeCount = skins.length;
     const result = await window.electronAPI.skinsSaveCurrent(activeAccountId);
     if (!result.success) {
       setDuplicateMsg(result.error || 'Could not save that skin.');
       return;
     }
     await refreshWardrobe();
+    recordAction('save-current');
     if (result.duplicate && result.message) setDuplicateMsg(result.message);
+    if (result.skin) announceIfFirstSkin(beforeCount, result.skin);
+  };
+
+  /** The first-skin ritual: 0 → 1 deserves a greeting and a springy card. */
+  const announceIfFirstSkin = (beforeCount: number, skin: { id: string }) => {
+    const afterCount = beforeCount + 1;
+    if (!isFirstSkin(beforeCount, afterCount)) return;
+    setFirstSkinMsg('saved. first of many.');
+    setMirrorEpoch((e) => e + 1); // the same GREETING wave, via the public reload path
+    // Springy entrance: mount the card hidden, flip on the next painted frame
+    // so the 120ms/300ms transitions actually animate from scale-95/opacity-0.
+    setFirstInId(skin.id);
+    requestAnimationFrame(() => requestAnimationFrame(() => setFirstInId(null)));
   };
 
   const handleEquip = async (skin: SkinEntry) => {
@@ -282,6 +356,8 @@ const IdentityView: React.FC = () => {
         return; // zero state changes on failure
       }
       setEquip({ id: skin.id, phase: 'ok', msg: 'wearing it now.' });
+      playEquipSwell();
+      recordAction('equip');
       await refreshWardrobe();
       // The hero picks the new skin up from the worn-skin hash; keep it shown.
       setTimeout(() => setEquip(null), 3000);
@@ -295,18 +371,21 @@ const IdentityView: React.FC = () => {
     setRenamingId(null);
     if (cleaned === skin.name || !cleaned) return;
     await window.electronAPI.skinsRename(skin.id, cleaned);
+    recordAction('rename');
     await loadSkins();
   };
 
   const handleDelete = async (skin: SkinEntry) => {
     setConfirmDeleteId(null);
     await window.electronAPI.skinsDelete(skin.id);
+    recordAction('delete');
     if (previewId === skin.id) setPreviewId(null); // hero falls back to the account skin
     await loadSkins();
   };
 
   const handleSetModel = async (skin: SkinEntry, model: 'classic' | 'slim') => {
     await window.electronAPI.skinsSetModel(skin.id, model);
+    recordAction('set-model');
     await loadSkins();
   };
 
@@ -329,6 +408,8 @@ const IdentityView: React.FC = () => {
       : 'worn skin';
   const heroActive = previewed ? previewed.hash === wearingHash : true;
   const heroMissing = !!previewed && previewed.dataUrl === null;
+  /** The library entry whose bytes the account is actually wearing. */
+  const wornEntry = wearingHash ? skins.find((s) => s.hash === wearingHash) ?? null : null;
 
   const libraryEmpty = !skinsLoading && skins.length === 0;
 
@@ -447,12 +528,7 @@ const IdentityView: React.FC = () => {
         <p className="text-[13px] text-dim">same game. different you.</p>
 
         <div className="relative mt-2 h-[300px] w-[200px]">
-          <SkinViewerCanvas
-            skinUrl={heroUrl}
-            model={heroModel}
-            interactive
-            onOrbitStart={handleOrbitStart}
-          />
+          <SkinViewerCanvas key={mirrorEpoch} skinUrl={heroUrl} model={heroModel} interactive onOrbitStart={handleOrbitStart} />
           {showDragHint && heroUrl !== undefined && (
             <p className="pointer-events-none absolute -bottom-1 left-1/2 -translate-x-1/2 text-[11px] text-faint transition-opacity duration-300">
               drag to rotate
@@ -460,11 +536,25 @@ const IdentityView: React.FC = () => {
           )}
         </div>
 
+        {mirrorLine && (
+          <p className="rise mt-3 text-[14px] font-medium text-ink">{mirrorLine}</p>
+        )}
+        {firstSkinMsg && (
+          <p className="rise mt-3 text-[13px] text-ember">{firstSkinMsg}</p>
+        )}
+
         <div className="mt-1 flex items-baseline gap-2">
           <span className="text-[15px] font-semibold tracking-[-0.01em] text-ink">{heroName}</span>
           <span className="font-mono text-[10px] tabular-nums text-faint">{heroChip}</span>
           {!previewed && heroActive && <span className="text-[10px] font-semibold lowercase text-ok/80">active</span>}
         </div>
+
+        {/* Task 1 — the wearing timeline (only when it's true) */}
+        {!previewed && wornEntry?.lastEquippedAt && (
+          <p className="mt-0.5 font-mono text-[10px] tabular-nums lowercase text-faint">
+            {formatWearingSince(Date.parse(wornEntry.lastEquippedAt))}
+          </p>
+        )}
 
         {/* equip — the one ember use on this screen */}
         {previewed && (
@@ -542,12 +632,16 @@ const IdentityView: React.FC = () => {
               return (
                 <div
                   key={skin.id}
-                  onClick={() => { setPreviewId(skin.id); setEquip(null); }}
-                  className={`group relative flex w-[104px] shrink-0 cursor-pointer flex-col items-center gap-1.5 rounded-[10px] border px-3 py-3 transition-all duration-micro ease-exit hover:-translate-y-0.5 ${
+                  onClick={() => {
+                    if (previewId !== skin.id) playSelectTick(); // shelf select → light tick
+                    setPreviewId(skin.id);
+                    setEquip(null);
+                  }}
+                  className={`group relative flex w-[104px] shrink-0 cursor-pointer flex-col items-center gap-1.5 rounded-[10px] border px-3 py-3 transition-all duration-micro ease-exit hover:-translate-y-1 hover:rotate-[1.2deg] hover:border-line-strong ${
                     isPreviewed
                       ? 'border-ember/60 bg-white/[0.02]'
-                      : 'border-line bg-transparent hover:border-line-strong'
-                  }`}
+                      : 'border-line bg-transparent'
+                  } ${firstInId === skin.id ? 'scale-95 opacity-0' : 'scale-100 opacity-100'}`}
                 >
                   <SkinHead dataUrl={skin.dataUrl} />
                   {renamingId === skin.id ? (
@@ -580,7 +674,14 @@ const IdentityView: React.FC = () => {
 
                   {isActive ? (
                     <>
-                      <span className="h-[2px] w-8 rounded-full bg-ember" aria-hidden />
+                      {/* 落位动画: scaleX from origin-left — the soft landing of
+                          the existing ease-exit curve reads as the settle. */}
+                      <span
+                        className={`h-[2px] w-8 origin-left rounded-full bg-ember transition-transform duration-300 ease-exit ${
+                          isActive ? 'scale-x-100' : 'scale-x-0'
+                        }`}
+                        aria-hidden
+                      />
                       <span className="text-[10px] lowercase text-ok/80">active</span>
                     </>
                   ) : confirming ? (
