@@ -98,3 +98,48 @@
 - fx/ 改动累计（均经用户授权）：`interactive`/`onOrbitStart`（Studio 轨道旋转）——Stage 1 未再触碰 fx/（Mirror Moment 通过 key 重挂载走公共 onShown 入口）。
 - `firstInId` 双 rAF 翻转依赖浏览器合成帧；reduced-motion 下入场仍可用（transition 被全局关闭，皮肤立即可见）。
 - 无 NEEDS DECISION 新增项。
+
+---
+
+# Stage 1 补遗 — equip 全应用同步修复（用户真机报告缺陷）
+
+现象（真机）：Studio equip 成功（"wearing it now."，Mojang 上传成功），返回 Play 视图皮肤仍是旧值。
+commit：`a3296e8`（fix(skins): propagate equip across views via cache write-through and skin-changed event）
+
+## 根因核实表
+
+| 假设 | 成立？ | 证据（行号以 euphoria-stage-1@a3296e8 前的父提交为准） |
+|---|---|---|
+| A. skins-equip 成功路径未写透 24h 缓存 | **不成立** | identity-service.ts L507-510：uploadSkin 成功路径**已**调用 `this.skinService.putCache(account.uuid, skinData, skinModel)`，skinData 即所装备库文件字节（skinPath = skins-library/<id>.png）。唯一缺口：`account.uuid` 缺失时跳过 putCache（L508 三元守卫）——已由新增显式写透补上 |
+| B. 无"皮肤已变更"事件广播 | **成立** | 修复前 `grep skin-changed src/main/index.ts` = 0 命中；notifyAuthChanged（L272）只广播 auth 数据 |
+| C. keep-alive 导航内存停留 | **成立（主因）** | fx/PlayerIdentity.tsx L29-49：`useEffect(…, [])` 空依赖——getSkin 仅挂载时取一次并存入组件 state；Play 视图为 keep-alive（SkinViewerCanvas L196-200 注释明确 display:none 切换不卸载），故 equip 后 hero 内存中的 dataUrl 永不更新 |
+
+## 修法（三处）
+
+1. **写透补强**（index.ts skins-equip 成功路径）：`new SkinService().putCache(uuid, bytes, model)` 显式写透库文件字节——覆盖 uploadSkin 的 uuid 缺失缺口，字节与 uploadSkin 内部写透完全一致，零网络。判定走纯函数 `shouldWriteThroughCache(uuid)`（uuid 非空才写）。
+2. **广播**：`notifySkinChanged(accountId, model)`（复用 notifyAuthChanged 事件模式）→ `skin-changed` 载荷由纯函数 `buildSkinChangedPayload` 组装；preload 暴露 `onSkinChanged` / `removeSkinChangedListeners`。
+3. **消费端**：PlayView 订阅 `skin-changed` → `playerSkinEpoch++` → `<PlayerIdentity key={epoch}>` 重挂载 → getSkin 重取（命中写透缓存，瞬时零网络）。fx/ 零改动（PlayerIdentity 未动，靠父级 key）。legacy 路径（get-skin L627 → resolvePlayerIdentity → 同一 uuid 缓存）天然一致。
+
+纯逻辑测试：tests/skin-sync.test.ts（5 用例：写透判定 uuid 三态、载荷字段/注入时钟/ISO 往返）。
+
+---
+
+# Stage 1 补遗 — equip 仪式按钮（用户验收："equip 按钮太怂"）
+
+commit：`e0faaa6`（feat(identity): equip as a ceremony — solid amber button with four-state interaction）
+
+| 规格 | 落地情况 |
+|---|---|
+| amber 实心按钮 | ✓ `bg-ember` + 深色文字 `text-[var(--ground)]` + `px-[28px] py-[10px]` + `rounded-full`（既有圆角）+ `text-[15px] font-semibold lowercase`（贴 hero 名字字号） |
+| 全屏唯一 amber 块面 | ✓ active 下划线是 amber 线条（scaleX），equip 是 amber 块面——层级分明不冲突 |
+| hover | ✓ `-translate-y-0.5`（2px 升）+ `brightness-105`（+5%）；视线偏移**零代码达成**：SkinViewerCanvas 的窗口级 gaze 本就跟随光标，光标移到按钮即注视按钮，移开即回正（公共行为，无 NEEDS DECISION） |
+| 按下 | ✓ `active:scale-[0.97] active:brightness-90` + `duration-micro`（120ms） |
+| in-flight | ✓ 文字 "wearing it now."、`disabled`、脉动 `@keyframes equip-pulse`（0.95↔1.0，800ms，组件内 <style>，未动设计系统文件） |
+| 成功链 | ✓ 300ms 溶解（`opacity-0` + duration-scene）→ `setPreviewId(null)` + hero key 重挂载（onShown GREETING）→ 货架 amber 下划线 scaleX 落位 |
+| 失败 | ✓ 按钮复原 + 下方一行 "couldn't reach mojang. nothing changed." + 200ms 红闪（`border-danger bg-danger/20`） |
+| 状态感知 | ✓ 佩戴中：无按钮 + "wearing it" 小写细字；离线：disabled + "requires microsoft" 小字；缺失文件：equip 不可用 + 说明 |
+| 纯逻辑 | ✓ `equipButtonKind` 六态机器（wearing/idle/busy/dissolving/disabled-offline/missing），tests/equip-button.test.ts 6 用例 |
+
+## NEEDS DECISION
+
+- 无新增。spec 中 "GAZE 层视线朝按钮偏移" 未改任何代码——既有窗口级 gaze 跟随光标的行为天然覆盖（hover 即注视、移开即回正）；若后续想要"hover 时锁定注视点（无视光标）"的更强效果，需要 fx/ 公共接口扩展（`setGazeTarget(rect)`），届时再标 NEEDS DECISION。
