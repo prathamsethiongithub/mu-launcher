@@ -8,6 +8,9 @@
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
+/** Overlay variant: equip morph curtain vs import reveal (shared API shape). */
+export type PixelCurtainVariant = 'equip' | 'import';
+
 export const CURTAIN_ASSEMBLE_MS = 400;
 export const CURTAIN_HOLD_MS = 100;
 export const CURTAIN_DISSOLVE_MS = 200;
@@ -185,17 +188,28 @@ export interface SweepRect {
 }
 
 /**
- * Vertical sweep band cleared at `progress` (0..1): full width, quarter-height
- * band centered on the moving frontier. Union over successive progress steps
- * covers the whole canvas; every rect is clamped inside [0, height].
+ * The region already cleared at `progress` (0..1): a full-width prefix of the
+ * canvas. The frontier leads progress by 1/8 of the height (the lower half of
+ * a conceptual 25% band), so the edge sweeps down ahead of the timeline.
+ * Self-contained per frame: redraw the curtain, then clear this prefix —
+ * frame drops converge instead of leaving gaps.
  */
 export function dissolveSweepGeometry(progress: number, width: number, height: number): SweepRect {
   const p = Math.min(1, Math.max(0, progress));
-  const band = height * 0.25;
-  const front = height * p;
-  const start = Math.max(0, front - band / 2);
-  const end = Math.min(height, front + band / 2);
-  return { x: 0, y: start, w: width, h: Math.max(0, end - start) };
+  const lead = height * 0.125;
+  const h = Math.min(height, Math.max(0, height * p + lead));
+  return { x: 0, y: 0, w: width, h };
+}
+
+// ── Button mapping (D6) ─────────────────────────────────────────────────────
+
+export type EquipButtonPhase = 'idle' | 'busy' | 'dissolving';
+
+/** materializing maps to the button's 'dissolving' kind; busy stays busy; everything else → idle. */
+export function equipButtonPhase(ceremony: CeremonyPhase | null): EquipButtonPhase {
+  if (ceremony === 'busy') return 'busy';
+  if (ceremony === 'materializing') return 'dissolving';
+  return 'idle';
 }
 
 // ── Equip ceremony state machine (D6) ────────────────────────────────────────

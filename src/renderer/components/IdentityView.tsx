@@ -8,6 +8,15 @@ import {
   hasReturnedAfterAbsence,
   isFirstSkin,
 } from '../../shared/studio-ritual';
+import { PixelCurtain } from './PixelCurtain';
+import {
+  equipButtonPhase,
+  equipCeremonyNext,
+  hashSeed,
+  type CeremonyEvent,
+  type CeremonyPhase,
+  type PixelCurtainVariant,
+} from '../../shared/pixel-curtain';
 
 /**
  * Identity Studio — the player's private skin wardrobe.
@@ -43,6 +52,16 @@ interface SkinEntry {
   hash: string;
   /** data URL of the PNG (null → the file is missing — the "missing" card). */
   dataUrl: string | null;
+}
+
+/** The active pixel-materialization overlay; null = no curtain mounted. */
+interface CurtainSpec {
+  variant: PixelCurtainVariant;
+  dataUrl: string;
+  seed: number;
+  skinId: string;
+  /** import only: this birth was the wardrobe's first skin (existing ritual owns the message). */
+  announceFirst: boolean;
 }
 
 const toViewerModel = (variant: 'classic' | 'slim'): 'default' | 'slim' =>
@@ -103,7 +122,7 @@ const IdentityView: React.FC = () => {
   const [wearingHash, setWearingHash] = useState<string | null>(null);
   /** Which entry the hero is previewing; null = the account's own skin. */
   const [previewId, setPreviewId] = useState<string | null>(null);
-  const [equip, setEquip] = useState<{ id: string; phase: 'busy' | 'ok' | 'fail'; msg: string } | null>(null);
+  const [equip, setEquip] = useState<{ id: string; phase: CeremonyPhase; msg: string } | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -114,9 +133,10 @@ const IdentityView: React.FC = () => {
   const [mirrorLine, setMirrorLine] = useState<string | null>(null);
   const [firstSkinMsg, setFirstSkinMsg] = useState<string | null>(null);
   const [firstInId, setFirstInId] = useState<string | null>(null);
-  /** Success dissolve (300 ms scene) + the 200 ms red flash on failure. */
-  const [dissolving, setDissolving] = useState(false);
+  /** The 200 ms red flash on failure. */
   const [failFlash, setFailFlash] = useState(false);
+  /** Pixel materialization overlay (equip morph curtain / import reveal). */
+  const [curtain, setCurtain] = useState<CurtainSpec | null>(null);
   /** Pleasure sensor: actions recorded this visit, classified on unmount. */
   const sensorActionsRef = useRef<string[]>([]);
 
@@ -141,13 +161,16 @@ const IdentityView: React.FC = () => {
     }
   }, []);
 
-  const loadSkins = useCallback(async () => {
+  const loadSkins = useCallback(async (): Promise<SkinEntry[]> => {
     setSkinsLoading(true);
     try {
       const result = await window.electronAPI.skinsList();
-      setSkins(result.skins ?? []);
+      const list = result.skins ?? [];
+      setSkins(list);
+      return list;
     } catch {
       setSkins([]);
+      return [];
     } finally {
       setSkinsLoading(false);
     }
@@ -290,9 +313,10 @@ const IdentityView: React.FC = () => {
   };
 
   // ── wardrobe actions ──────────────────────────────────────────────────
-  const refreshWardrobe = useCallback(async () => {
-    await loadSkins();
+  const refreshWardrobe = useCallback(async (): Promise<SkinEntry[]> => {
+    const list = await loadSkins();
     await loadWearingHash(activeAccountId);
+    return list;
   }, [loadSkins, loadWearingHash, activeAccountId]);
 
   const handleAddSkin = async () => {
@@ -310,16 +334,17 @@ const IdentityView: React.FC = () => {
       setDuplicateMsg(result.error || 'Could not add that skin.');
       return;
     }
-    await loadSkins();
+    const list = await loadSkins(); // the refreshed list is the single data source
     recordAction('import');
     if (result.duplicate && result.message) {
       setDuplicateMsg(result.message);
       return;
     }
     if (result.skin) {
-      setPreviewId(result.skin.id);
       setDuplicateMsg(null);
       announceIfFirstSkin(beforeCount, result.skin);
+      const revealing = startImportReveal(list, result.skin.id, beforeCount);
+      if (!revealing) setPreviewId(result.skin.id); // no texture → no ceremony
     }
   };
 
@@ -332,10 +357,14 @@ const IdentityView: React.FC = () => {
       setDuplicateMsg(result.error || 'Could not save that skin.');
       return;
     }
-    await refreshWardrobe();
+    const list = await refreshWardrobe(); // the refreshed list is the single data source
     recordAction('save-current');
     if (result.duplicate && result.message) setDuplicateMsg(result.message);
-    if (result.skin) announceIfFirstSkin(beforeCount, result.skin);
+    if (result.skin) {
+      announceIfFirstSkin(beforeCount, result.skin);
+      const revealing = startImportReveal(list, result.skin.id, beforeCount);
+      if (!revealing) setPreviewId(result.skin.id); // no texture → no ceremony
+    }
   };
 
   /** The first-skin ritual: 0 → 1 deserves a greeting and a springy card. */
@@ -350,9 +379,60 @@ const IdentityView: React.FC = () => {
     requestAnimationFrame(() => requestAnimationFrame(() => setFirstInId(null)));
   };
 
+  // ── pixel materialization (equip morph curtain + import reveal) ───────
+  /** All ceremony transitions pass through the pure machine. */
+  const dispatchCeremony = (event: CeremonyEvent) =>
+    setEquip((cur) => {
+      if (!cur) return cur;
+      const next = equipCeremonyNext(cur.phase, event);
+      return next === 'done' ? null : { ...cur, phase: next };
+    });
+
+  /** Settle any in-flight curtain to its end state — never two layers. */
+  const finalizeActiveCurtain = () => {
+    if (!curtain) return;
+    if (curtain.variant === 'import' && !curtain.announceFirst) setFirstSkinMsg('saved.');
+    setCurtain(null);
+    dispatchCeremony({ type: 'CURTAIN_END' });
+  };
+
+  /** equip swap window = hold start; import swap window = reveal start. */
+  const handleCurtainSwap = () => {
+    if (!curtain) return;
+    if (curtain.variant === 'equip') {
+      setPreviewId(null);           // hero falls back to the worn skin, behind the curtain
+      setMirrorEpoch((e) => e + 1); // remount → the GREETING wave greets the dissolve
+    } else {
+      setPreviewId(curtain.skinId); // the new skin appears exactly at reveal start
+    }
+  };
+
+  /** Complete and skip land on the same final state; the canvas unmounts instantly. */
+  const handleCurtainEnd = () => {
+    if (curtain?.variant === 'import' && !curtain.announceFirst) setFirstSkinMsg('saved.');
+    setCurtain(null);
+    dispatchCeremony({ type: 'CURTAIN_END' });
+  };
+
+  /** File import and save-current share one reveal — a new skin is born. */
+  const startImportReveal = (list: SkinEntry[], skinId: string, beforeCount: number): boolean => {
+    const entry = list.find((s) => s.id === skinId);
+    if (!entry || !entry.dataUrl) return false; // no texture → caller previews instantly
+    finalizeActiveCurtain();
+    setCurtain({
+      variant: 'import',
+      dataUrl: entry.dataUrl,
+      seed: hashSeed(entry.hash),
+      skinId,
+      announceFirst: isFirstSkin(beforeCount, beforeCount + 1),
+    });
+    return true;
+  };
+
   const handleEquip = async (skin: SkinEntry) => {
     if (!canWearCustom) return;
-    setEquip({ id: skin.id, phase: 'busy', msg: 'wearing it now.' });
+    finalizeActiveCurtain(); // settle any in-flight curtain — never two layers
+    setEquip({ id: skin.id, phase: equipCeremonyNext('idle', { type: 'EQUIP_START' }), msg: 'wearing it now.' });
     try {
       const result = await window.electronAPI.skinsEquip(skin.id);
       if (!result.success) {
@@ -364,16 +444,26 @@ const IdentityView: React.FC = () => {
       playEquipSwell();
       recordAction('equip');
       await refreshWardrobe();
-      // The ceremony chain: dissolve (300 ms scene) → the hero falls back to
-      // the worn account skin and remounts (key bump → onShown GREETING) while
-      // the shelf card's amber underline lands via its scaleX transition.
-      setDissolving(true);
-      setTimeout(() => {
-        setDissolving(false);
+      if (!skin.dataUrl) {
+        // No texture to curtain with (unreachable via the UI: missing-file
+        // cards render no equip button) → the honest instant swap.
         setPreviewId(null);
         setMirrorEpoch((e) => e + 1);
         setEquip(null);
-      }, 300);
+        return;
+      }
+      dispatchCeremony({ type: 'EQUIP_SUCCESS' }); // busy → materializing
+      setCurtain({
+        variant: 'equip',
+        dataUrl: skin.dataUrl,
+        seed: hashSeed(skin.hash),
+        skinId: skin.id,
+        announceFirst: false,
+      });
+      // The curtain owns the rest: assemble 400 ms (the button dissolves in
+      // parallel via materializing → 'dissolving' kind), the swap window at
+      // hold start remounts the hero behind the curtain, then the sweep
+      // dissolves and handleCurtainEnd clears the ceremony.
     } catch {
       setEquip({ id: skin.id, phase: 'fail', msg: 'couldn’t reach mojang. nothing changed.' });
       setFailFlash(true);
@@ -544,6 +634,16 @@ const IdentityView: React.FC = () => {
 
         <div className="relative mt-2 h-[300px] w-[200px]">
           <SkinViewerCanvas key={mirrorEpoch} skinUrl={heroUrl} model={heroModel} interactive onOrbitStart={handleOrbitStart} />
+          {curtain && (
+            <PixelCurtain
+              dataUrl={curtain.dataUrl}
+              variant={curtain.variant}
+              seed={curtain.seed}
+              onSwapWindow={handleCurtainSwap}
+              onComplete={handleCurtainEnd}
+              onSkip={handleCurtainEnd}
+            />
+          )}
           {showDragHint && heroUrl !== undefined && (
             <p className="pointer-events-none absolute -bottom-1 left-1/2 -translate-x-1/2 text-[11px] text-faint transition-opacity duration-300">
               drag to rotate
@@ -582,7 +682,7 @@ const IdentityView: React.FC = () => {
                 heroMissing,
                 isActiveSkin: heroActive,
                 canWearCustom,
-                phase: dissolving ? 'dissolving' : equip?.id === previewed.id && equip.phase === 'busy' ? 'busy' : 'idle',
+                phase: equipButtonPhase(equip && equip.id === previewed.id ? equip.phase : null),
               });
               if (kind.kind === 'wearing') {
                 return <span className="text-[11px] lowercase text-ok/80">wearing it</span>;
@@ -678,7 +778,7 @@ const IdentityView: React.FC = () => {
             {skins.map((skin) => {
               const isActive = skin.hash === wearingHash && !!wearingHash;
               const isPreviewed = previewId === skin.id;
-              const isEquipping = equip?.id === skin.id && equip.phase === 'busy';
+              const isEquipping = equip?.id === skin.id && (equip.phase === 'busy' || equip.phase === 'materializing');
               const confirming = confirmDeleteId === skin.id;
               return (
                 <div
