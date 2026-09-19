@@ -2,7 +2,7 @@
 
 **Timestamp:** 2026-09-10, 21:46 IST
 **Written by:** Buffy (Freebuff / GLM 5.3-flash) for the next session
-**Project:** MU Master Launcher (Electron + React + TypeScript, MCLC, MSMC)
+**Project:** Ember (Electron + React + TypeScript, MCLC, MSMC)
 
 ## Where everything lives
 

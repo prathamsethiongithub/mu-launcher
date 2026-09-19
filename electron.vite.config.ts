@@ -29,6 +29,10 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/renderer/index.html'),
+          // THE SPLASH: a second standalone HTML entry — no bundling, copied
+          // verbatim to out/renderer/ so the main process can loadFile it
+          // before the React app has built anything.
+          splash: resolve(__dirname, 'src/renderer/splash.html'),
         },
       },
     },

@@ -1,4 +1,4 @@
-# Master Launcher
+# Ember
 
 **Custom Minecraft launcher for the Masters' Union SMP. One-click join. Zero friction.**
 
@@ -69,7 +69,7 @@ mu-launcher/
 
 | Setting           | Value                              |
 | ----------------- | ---------------------------------- |
-| Product name      | Master Launcher                    |
+| Product name      | Ember                              |
 | Repository        | `prathamsethiongithub/mu-launcher` |
 | Server            | `mastersunion.minekeep.gg:25565`   |
 | Minecraft version | 26.1.2 (pinned in launch-service)  |

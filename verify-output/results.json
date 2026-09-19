@@ -1,0 +1,62 @@
+[
+  {
+    "id": "P0-1",
+    "name": "CORRUPTED badge eliminated",
+    "status": "FIXED",
+    "evidence": "no \"Corrupted\" text anywhere on Worlds shelf"
+  },
+  {
+    "id": "P1-1",
+    "name": "Managed world overflow menu",
+    "status": "FIXED",
+    "evidence": "menu = Mod Manager/Back up/Backups; no Rename/Duplicate/Delete"
+  },
+  {
+    "id": "P1-8",
+    "name": "Empty state copy",
+    "status": "FIXED",
+    "evidence": "{\"isEmptyState\":true,\"newCopy\":true,\"oldCopy\":false}"
+  },
+  {
+    "id": "P1-6",
+    "name": "Delete busy/disabled + refresh",
+    "status": "FIXED",
+    "evidence": "listed=true disabledTransitions=[{\"t\":9572,\"disabled\":true},{\"t\":9580,\"disabled\":false}] rowRemovedAfterDelete=true"
+  },
+  {
+    "id": "P1-5",
+    "name": "Empty-name inline error",
+    "status": "FIXED",
+    "evidence": "error \"Give your world a name.\" shown; Create clickable without text"
+  },
+  {
+    "id": "P1-4",
+    "name": "Non-modpack drop rejected with toast",
+    "status": "FIXED",
+    "evidence": "toast \"Only .mrpack or .zip modpack files are supported.\" shown after real .txt drop"
+  },
+  {
+    "id": "P0-2",
+    "name": "Setup → Play nav click works",
+    "status": "FIXED",
+    "evidence": "nav current=Play, CTA visible after real coordinate click"
+  },
+  {
+    "id": "P1-2",
+    "name": "CTA hover/press transforms",
+    "status": "STILL BROKEN",
+    "evidence": "rest=none hover=matrix(1, 0, 0, 1, 0, 0) active=matrix(1.05, 0, 0, 1.05, 0, 0) hoverFilter=brightness(1) drop-shadow(rgba(0, 0, 0, 0) 0px 0px 0px)"
+  },
+  {
+    "id": "P1-3",
+    "name": "Keyboard focus-visible ring",
+    "status": "FIXED",
+    "evidence": "focused <BUTTON.relative flex items-center gap-2 rounded>: solid amber outline 1.6px (2px CSS × page zoom)"
+  },
+  {
+    "id": "P1-7",
+    "name": "Nav hover feedback",
+    "status": "STILL BROKEN",
+    "evidence": "bg rgba(0, 0, 0, 0) → rgba(0, 0, 0, 0), color rgb(156, 149, 138) → rgb(156, 149, 138)"
+  }
+]

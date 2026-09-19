@@ -13,6 +13,9 @@ import { WorldManager } from './world-manager';
 import { listMods, toggleMod, deleteMod, addMod } from './mod-manager';
 import { installModpackOverrides } from './modpack-installer';
 import { pingMinecraftServer } from './server-pinger';
+import { initTray, disposeTray } from './tray-manager';
+import { diagnoseLastCrash } from './crash-diagnostic';
+import { checkForUpdates, performUpdate } from './update-checker';
 import { IdentityService } from './identity-service';
 import type { Account, LoaderType } from '../shared/types';
 
@@ -40,12 +43,63 @@ let launchInProgress = false;
 // renderer never supplies (or sees) a filesystem path.
 let pendingSkinPath: string | null = null;
 
+// ── USER DATA ANCHOR ──────────────────────────────────────────────────
+// The package rename to "ember-launcher" would otherwise move userData
+// from %APPDATA%/mu-master-launcher to %APPDATA%/ember-launcher —
+// orphaning every account, world and skin on first launch. Pin the path
+// to the historical directory: zero migration risk, invisible to users.
+app.setPath('userData', join(app.getPath('appData'), 'mu-master-launcher'));
+
 function createWindow(): void {
+  // ── THE SPLASH ─────────────────────────────────────────────────────────
+  // A frameless opaque card shown BEFORE the main window builds: the
+  // renderer bundle is 2MB+, and without this the user stares at nothing
+  // for seconds on cold start. Load it first so it paints immediately.
+  const splash = new BrowserWindow({
+    width: 360,
+    height: 360,
+    frame: false,
+    backgroundColor: '#0b0a09', // opaque from the first paint — transparent windows flash white on Windows before the first frame
+    center: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    skipTaskbar: true,
+    hasShadow: false, // a floating card, not a "window"
+    webPreferences: {
+      // Grant the intro's audio track without any user gesture. The splash
+      // is our own inert loading screen — the click-to-unmute chip exists
+      // as the fallback for platforms that refuse this anyway.
+      autoplayPolicy: 'no-user-gesture-required',
+    },
+  });
+  splash.loadFile(join(__dirname, '../renderer/splash.html'));
+
+  // ── SPLASH VIDEO HANDOFF ─────────────────────────────────────────────
+  // The splash page owns the whole flow (sound-first play() attempt, muted
+  // fallback + click-to-unmute chip, ended/error → __splashDone). This
+  // injection is just belt and braces: start it if the inline script never
+  // ran. Idempotent — a double start is a no-op. A broken or missing video
+  // must never trap the user.
+  splash.webContents.on('did-finish-load', () => {
+    splash.webContents
+      .executeJavaScript(`
+        if (typeof window.__startIntroFlow === 'function') {
+          window.__startIntroFlow();
+        } else {
+          window.__splashDone = true;
+        }
+      `)
+      .catch(() => {}); // splash already closing — nothing to inject into
+  });
+
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 900,
     minHeight: 600,
+    show: false, // stays invisible until ready-to-show — the splash owns the screen until then
+    backgroundColor: '#0b0a09', // dark from the first paint — no white flash while React mounts
     icon: join(__dirname, '../../build/icon.ico'),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -92,6 +146,59 @@ function createWindow(): void {
   } else {
     mainWindow.loadFile(join(__dirname, '../renderer/index.html'));
   }
+
+  // Splash → main handoff, VIDEO-GATED: the intro reveal owns the screen.
+  // The main window loads BEHIND it (the 2MB bundle compiles while the
+  // video plays) and is shown only when BOTH sides are ready — the video
+  // finished AND the app has rendered. Each side has its own skip path, so
+  // no state combination can trap the user on the splash.
+  let splashDismissed = false;
+  let videoDone = false;
+  let mainReady = false;
+  // Assigned below; cleared at handoff so polling stops once it's done.
+  let splashCheck: ReturnType<typeof setInterval> | undefined;
+
+  const handoff = (): void => {
+    if (splashDismissed) return;
+    splashDismissed = true;
+    if (splashCheck !== undefined) clearInterval(splashCheck);
+    if (!splash.isDestroyed()) splash.close();
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.show();
+  };
+
+  // Main side: ready-to-show alone must NOT dismiss — that was the bug
+  // where the app window opened over a video that had barely started. It
+  // only marks the app side; the video side decides the handoff moment.
+  mainWindow.once('ready-to-show', () => {
+    mainReady = true;
+    if (videoDone) handoff();
+  });
+
+  // Hard caps: a wedged dev server, a video that never signals, or the
+  // splash closed out from under us (user Alt+F4) — show the app anyway.
+  setTimeout(handoff, 8000);
+  splash.once('closed', () => {
+    videoDone = true;
+    handoff();
+  });
+
+  // Video side: the reveal plays, __splashDone flips, we hand off (only if
+  // the app has finished loading behind the splash — otherwise the video's
+  // final frame lingers until ready-to-show arrives). 100ms cadence is
+  // imperceptible; .catch swallows the executeJavaScript rejection once
+  // the splash window is destroyed.
+  splashCheck = setInterval(() => {
+    if (splashDismissed) return;
+    splash.webContents
+      .executeJavaScript('window.__splashDone === true')
+      .then((done) => {
+        if (done) {
+          videoDone = true;
+          if (mainReady) handoff();
+        }
+      })
+      .catch(() => {});
+  }, 100);
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -331,6 +438,56 @@ function registerIpcHandlers(): void {
       console.error('[java-provisioner-error]', error);
       throw error;
     }
+  });
+
+  /**
+   * 'detect-java' — Local Java runtime detection for the Setup screen.
+   * Scans the common Windows install roots (Oracle, Adoptium, Microsoft JDK)
+   * plus this launcher's own provisioned runtime ({userData}/runtime) for a
+   * java.exe, so "Detect" can report what's actually on the machine without
+   * downloading anything. Read-only probing: permission errors and unreadable
+   * directories are skipped, never thrown.
+   */
+  ipcMain.handle('detect-java', async () => {
+    const paths: string[] = [];
+    const fs = await import('fs');
+    const path = await import('path');
+
+    // Windows common install roots
+    if (process.platform === 'win32') {
+      const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
+      const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+      const localAppData = process.env.LOCALAPPDATA || '';
+
+      paths.push(path.join(programFiles, 'Java'));
+      paths.push(path.join(programFilesX86, 'Java'));
+      paths.push(path.join(programFiles, 'Eclipse Adoptium'));
+      paths.push(path.join(programFiles, 'Microsoft', 'jdk'));
+      if (localAppData) {
+        paths.push(path.join(localAppData, 'Programs', 'Eclipse Adoptium'));
+      }
+      // Masters Union launcher's own provisioned runtime (userData/runtime)
+      const userDataPath = app.getPath('userData');
+      paths.push(path.join(userDataPath, 'runtime'));
+    }
+
+    // One level deep per root: {root}/{entry}/bin/java.exe
+    for (const dir of paths) {
+      try {
+        if (!fs.existsSync(dir)) continue;
+        const entries = fs.readdirSync(dir);
+        for (const entry of entries) {
+          const javaExe = path.join(dir, entry, 'bin', 'java.exe');
+          if (fs.existsSync(javaExe)) {
+            return { success: true, path: javaExe };
+          }
+        }
+      } catch {
+        // Unreadable directory / permission error — keep scanning
+      }
+    }
+
+    return { success: false, error: 'Java not found. Please install Java 21 or later.' };
   });
 
   // --- Auth IPC Handlers ---
@@ -743,6 +900,64 @@ function registerIpcHandlers(): void {
     if (!worldManager) return 'corrupted';
     return worldManager.checkWorldHealth(worldId);
   });
+
+  /**
+   * 'diagnose-world' — THE ORACLE: read the world's most recent crash
+   * report and attribute the crash (mod name + reason). The renderer sends
+   * a world id only; the root resolves through WorldManager here. Never
+   * throws — diagnoseLastCrash's contract and the guard below both return
+   * { crashed: false } on any failure.
+   */
+  ipcMain.handle('diagnose-world', async (_event, worldId: string) => {
+    if (!worldManager) return { crashed: false };
+    const world = worldManager.getWorlds().find((w) => w.id === worldId);
+    if (!world) return { crashed: false };
+    try {
+      return await diagnoseLastCrash(worldManager.resolveRoot(world));
+    } catch (err) {
+      console.error('[oracle] diagnosis failed:', err);
+      return { crashed: false };
+    }
+  });
+
+  /**
+   * 'check-mod-updates' — Mod Update Notifier: scans the world's mods/ for
+   * Fabric mods and asks Modrinth whether a newer compatible release exists.
+   * Per-mod failures never throw (checkForUpdates skips them); only a bad
+   * worldId/manager state short-circuits to [].
+   */
+  ipcMain.handle('check-mod-updates', async (_event, worldId: string) => {
+    if (!worldManager) return [];
+    const world = worldManager.getWorlds().find((w) => w.id === worldId);
+    if (!world) return [];
+    try {
+      return await checkForUpdates(worldManager.resolveRoot(world), world.version, world.loader);
+    } catch (err) {
+      console.error('[mod-updates] check failed:', err);
+      return [];
+    }
+  });
+
+  /**
+   * 'perform-mod-update' — downloads the new release into the world's mods/
+   * and removes the superseded jar. Download-before-delete ordering lives in
+   * performUpdate; a failure here surfaces as { success: false, error }.
+   */
+  ipcMain.handle(
+    'perform-mod-update',
+    async (_event, worldId: string, oldFilename: string, downloadUrl: string, newFilename: string) => {
+      if (!worldManager) return { success: false, error: 'World system not initialized.' };
+      const world = worldManager.getWorlds().find((w) => w.id === worldId);
+      if (!world) return { success: false, error: 'World not found.' };
+      try {
+        await performUpdate(worldManager.resolveRoot(world), oldFilename, downloadUrl, newFilename);
+        return { success: true };
+      } catch (err) {
+        console.error('[mod-updates] perform failed:', err);
+        return { success: false, error: err instanceof Error ? err.message : String(err) };
+      }
+    },
+  );
 
   /**
    * 'repair-world' — Recreate a broken world's root directory so it can
@@ -1199,7 +1414,7 @@ function registerIpcHandlers(): void {
 }
 
 // App lifecycle
-app.setAppUserModelId('com.mastersunion.masterlauncher');
+app.setAppUserModelId('com.mastersunion.ember');
 
 app.whenReady().then(() => {
   // Skip single-instance check in dev mode (zombie processes from rapid restarts)
@@ -1221,6 +1436,10 @@ app.whenReady().then(() => {
 
   registerIpcHandlers();
   createWindow();
+
+  // THE TEMPORAL PING: close-to-tray + background server monitor.
+  // Safe to call here — createWindow() synchronously assigned mainWindow.
+  initTray(mainWindow!);
 
   // Initialize the WorldManager singleton — handles migration from
   // existing {userData}/minecraft/ directory and creates worlds.json
@@ -1253,6 +1472,12 @@ app.whenReady().then(() => {
       createWindow();
     }
   });
+});
+
+app.on('before-quit', () => {
+  // Tear down the Temporal Ping tray + monitor so quit is clean and the
+  // close interceptor (isQuitting flag) does not block window teardown.
+  disposeTray();
 });
 
 app.on('window-all-closed', () => {

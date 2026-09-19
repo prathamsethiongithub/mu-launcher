@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 
 interface ModrinthBrowserProps {
   worldId: string;
+  worldName: string;
   worldVersion: string;
   worldLoader: string;
   onClose: () => void;
@@ -20,11 +21,11 @@ interface SearchResult {
 
 type InstallState = 'idle' | 'installing' | 'installed';
 
-/** 1234567 → "1.2M". Compact download counts, the way stores display them. */
+/** Download counts in store shorthand: 1234567 → "1.2M", 12345 → "12K". */
 const formatDownloads = (n: number): string => {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
-  return String(n);
+  if (n > 1_000_000) return `${(n / 1_000_000).toFixed(1)}M downloads`;
+  if (n > 1_000) return `${(n / 1_000).toFixed(0)}K downloads`;
+  return `${n} downloads`;
 };
 
 /** Per-project install lifecycle, keyed by Modrinth project id. */
@@ -35,8 +36,13 @@ interface InstallEntry {
 
 const SEARCH_DEBOUNCE_MS = 500;
 
+/** "vanilla" → "Vanilla" — loader names are stored lowercase. */
+const formatLoader = (loader: string): string =>
+  loader.charAt(0).toUpperCase() + loader.slice(1);
+
 /**
- * Modrinth Discover — premium in-launcher mod browser. Type to search (500ms
+ * Modrinth Discover — premium in-launcher mod browser. Opens on Modrinth's
+ * popular list (an empty query is downloads-sorted), type to search (500ms
  * debounce), install with one click. Version/loader facets are applied by the
  * main process so every result is installable in THIS world.
  *
@@ -46,6 +52,7 @@ const SEARCH_DEBOUNCE_MS = 500;
  */
 const ModrinthBrowser: React.FC<ModrinthBrowserProps> = ({
   worldId,
+  worldName,
   worldVersion,
   worldLoader,
   onClose,
@@ -53,9 +60,21 @@ const ModrinthBrowser: React.FC<ModrinthBrowserProps> = ({
 }) => {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
-  const [searching, setSearching] = useState(true);
+  const [searching, setSearching] = useState(false);
   const [searchFailed, setSearchFailed] = useState(false);
   const [installs, setInstalls] = useState<Record<string, InstallEntry>>({});
+
+  // Version override for search. Custom/private worlds may pin versions that
+  // don't exist on Modrinth (e.g. the SMP's "26.3"), which would filter every
+  // result to zero — so the user can pick a real one, or "Any Version".
+  // The world's own version is ALWAYS offered first (Modrinth may support it);
+  // the initial selection stays empty (= no version facet) unless it's a known
+  // Modrinth release, since exotic pins like "26.3" still zero out results.
+  const SEARCH_VERSIONS = ['1.21.1', '1.20.1', '1.19.2', '1.18.2', '1.16.5'];
+  const versions = [...new Set([worldVersion, ...SEARCH_VERSIONS])].filter(Boolean);
+  const [searchVersion, setSearchVersion] = useState(
+    SEARCH_VERSIONS.includes(worldVersion) ? worldVersion : '',
+  );
 
   // Latest-effect-wins: each search bumps a sequence number; responses from
   // stale sequences (e.g. a slow reply landing after a new keystroke) are
@@ -69,7 +88,10 @@ const ModrinthBrowser: React.FC<ModrinthBrowserProps> = ({
       setSearching(true);
       setSearchFailed(false);
       try {
-        const hits = await window.electronAPI.searchModrinth(q, worldVersion, worldLoader);
+        // Vanilla has no Modrinth category, so no loader facet for it.
+        const loaderFacet = worldLoader === 'vanilla' ? undefined : worldLoader;
+        const versionFacet = searchVersion || undefined;
+        const hits = await window.electronAPI.searchModrinth(q, versionFacet, loaderFacet);
         if (seq !== searchSeq.current) return; // superseded — drop it
         setResults(hits);
       } catch (err) {
@@ -81,18 +103,26 @@ const ModrinthBrowser: React.FC<ModrinthBrowserProps> = ({
         if (seq === searchSeq.current) setSearching(false);
       }
     },
-    [worldVersion, worldLoader],
+    [searchVersion, worldLoader],
   );
 
-  // Debounced auto-search on query change — including initial mount with an
-  // empty query: Modrinth returns relevance-sorted popular mods, a good
-  // landing state for a browse-first panel.
+  // Search on query change: an empty query fires immediately (no debounce)
+  // and fetches the popular/recommended list — that's also what runs on mount,
+  // so the panel opens on recommendations instead of a blank prompt. Typed
+  // queries go through the debounce. runSearch is a dep, so changing the
+  // version dropdown re-runs the active search with the new facet as well.
   useEffect(() => {
+    if (!query.trim()) {
+      setResults([]);
+      setSearchFailed(false);
+      runSearch('');
+      return;
+    }
     const t = setTimeout(() => {
       runSearch(query);
     }, SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
-  }, [query, runSearch]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [query, runSearch]);
 
   const handleInstall = async (result: SearchResult) => {
     const current = installs[result.id];
@@ -123,7 +153,7 @@ const ModrinthBrowser: React.FC<ModrinthBrowserProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="surface panel-in relative m-4 flex h-[80vh] w-full max-w-[640px] flex-col rounded-[18px] p-8">
+      <div className="surface panel-in relative m-4 flex max-h-[85vh] w-full max-w-[720px] flex-col rounded-[18px] p-8">
         {/* Close */}
         <button
           onClick={onClose}
@@ -133,46 +163,67 @@ const ModrinthBrowser: React.FC<ModrinthBrowserProps> = ({
           &times;
         </button>
 
-        <p className="microlabel mb-3">Discover</p>
-        <h2 className="font-display text-[24px] font-bold tracking-[-0.03em] text-ink">
-          Mods for {worldLoader === 'vanilla' ? 'Vanilla' : worldLoader} {worldVersion}
+        {/* Header */}
+        <p className="microlabel mb-3">Browse Mods</p>
+        <h2 className="font-display text-[22px] font-bold tracking-[-0.03em] text-ink">
+          {worldName}
         </h2>
+        <p className="mt-1 text-[12px] text-faint">
+          Minecraft {worldVersion} &middot; {formatLoader(worldLoader)}
+        </p>
 
-        {/* Search input */}
-        <div className="relative mt-5 shrink-0">
-          <svg
-            className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-faint"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth={2}
-            strokeLinecap="round"
-          >
-            <circle cx="11" cy="11" r="7" />
-            <path d="M21 21l-4.35-4.35" />
-          </svg>
-          <input
-            type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search Modrinth — try sodium, lithium, shaders…"
-            autoFocus
-            className="w-full rounded-[10px] border border-line bg-white/[0.03] py-3 pl-10 pr-4 text-[14px] text-ink placeholder:text-faint focus:border-ember/30 focus:outline-none transition-colors duration-micro"
-          />
+        {/* Search + version override — single control row. Search grows,
+            filter stays fixed. Focus pulls the icon into the ember accent. */}
+        <div className="mt-5 flex w-full items-center gap-2">
+          {/* Search */}
+          <div className="group relative flex-1">
+            <svg className="pointer-events-none absolute left-3.5 top-1/2 size-4 -translate-y-1/2 text-white/30 transition-colors group-focus-within:text-[#C88735]/80" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+              <circle cx="11" cy="11" r="8" />
+              <path d="M21 21l-4.35-4.35" />
+            </svg>
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search mods on Modrinth…"
+              autoFocus
+              className="h-11 w-full rounded-[9px] border border-white/[0.06] bg-white/[0.02] pl-10 pr-4 text-[13px] text-white/90 placeholder:text-white/25 outline-none transition-all duration-150 hover:border-white/[0.09] focus:border-[#C88735]/40 focus:bg-white/[0.025] focus:ring-1 focus:ring-[#C88735]/15 [&::-webkit-search-cancel-button]:appearance-none"
+            />
+          </div>
+
+          {/* Version filter */}
+          <div className="relative shrink-0">
+            <select
+              value={searchVersion}
+              onChange={(e) => setSearchVersion(e.target.value)}
+              className="h-11 min-w-[150px] appearance-none rounded-[9px] border border-white/[0.06] bg-white/[0.02] pl-3.5 pr-10 text-[13px] font-medium text-white/65 outline-none transition-all duration-150 hover:border-white/[0.09] focus:border-[#C88735]/40 focus:ring-1 focus:ring-[#C88735]/15"
+              aria-label="Filter by version"
+            >
+              <option value="" className="bg-[#0b0a09] text-white">Any Version</option>
+              {versions.map((v) => (
+                <option key={v} value={v} className="bg-[#0b0a09] text-white">
+                  {v}
+                </option>
+              ))}
+            </select>
+            <svg className="pointer-events-none absolute right-3 top-1/2 size-3.5 -translate-y-1/2 text-white/30" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8}>
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </div>
         </div>
 
         {/* Results */}
         <div className="mt-5 min-h-0 flex-1 overflow-y-auto pr-1">
           {searching ? (
-            <div className="flex items-center gap-2.5 py-12">
+            <div className="flex items-center justify-center gap-2.5 py-12">
               <div className="dot-breathe h-[5px] w-[5px] rounded-full bg-ember" />
-              <p className="microlabel">Searching</p>
+              <p className="microlabel">
+                {query.trim() ? 'Searching Modrinth...' : 'Loading popular mods...'}
+              </p>
             </div>
           ) : searchFailed ? (
             <div className="py-12 text-center">
-              <p className="text-[12px] text-danger/80">Couldn't reach Modrinth.</p>
+              <p className="text-[13px] text-faint">Couldn&apos;t reach Modrinth.</p>
               <button
                 onClick={() => runSearch(query)}
                 className="mt-2 text-[12px] font-medium text-ember transition-colors duration-micro hover:text-ember-deep"
@@ -182,25 +233,24 @@ const ModrinthBrowser: React.FC<ModrinthBrowserProps> = ({
             </div>
           ) : results.length === 0 ? (
             <div className="py-12 text-center">
-              <p className="text-[13px] text-dim">No results{query ? ` for "${query}"` : ''}.</p>
-              <p className="mt-1 text-[12px] text-faint">
-                Try a shorter name — or check the world's version/loader filter.
+              <p className="text-[13px] text-faint">
+                {query.trim() ? 'No mods found. Try a different search.' : 'No popular mods found.'}
               </p>
             </div>
           ) : (
-            <ul className="flex flex-col gap-2">
-              {results.map((result) => {
-                const entry: InstallEntry = installs[result.id] ?? { state: 'idle' };
+            <div>
+              {results.map((mod) => {
+                const entry: InstallEntry = installs[mod.id] ?? { state: 'idle' };
                 return (
-                  <li
-                    key={result.id}
-                    className="flex items-start gap-3.5 rounded-[12px] border border-white/[0.06] p-4 transition-all duration-micro ease-exit hover:border-white/[0.12]"
+                  <div
+                    key={mod.id}
+                    className="group flex items-center gap-4 rounded-[10px] border border-white/[0.06] bg-white/[0.015] px-4 py-3 transition-all duration-micro ease-exit hover:border-white/[0.10]"
                   >
-                    {/* Icon (Modrinth CDN — allowlisted in CSP img-src) */}
-                    <div className="h-[44px] w-[44px] shrink-0 overflow-hidden rounded-[9px] border border-white/[0.06] bg-white/[0.03]">
-                      {result.iconUrl ? (
+                    {/* Mod icon */}
+                    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-[8px] border border-white/[0.06] bg-white/[0.03]">
+                      {mod.iconUrl ? (
                         <img
-                          src={result.iconUrl}
+                          src={mod.iconUrl}
                           alt=""
                           className="h-full w-full object-cover"
                           loading="lazy"
@@ -208,56 +258,55 @@ const ModrinthBrowser: React.FC<ModrinthBrowserProps> = ({
                             (e.target as HTMLImageElement).style.display = 'none';
                           }}
                         />
-                      ) : null}
-                    </div>
-
-                    {/* Title / author / description / downloads */}
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-baseline gap-2">
-                        <p className="truncate text-[14px] font-semibold tracking-[-0.01em] text-ink">
-                          {result.title}
-                        </p>
-                        {result.author && (
-                          <p className="shrink-0 text-[11px] text-faint">by {result.author}</p>
-                        )}
-                      </div>
-                      <p className="mt-0.5 line-clamp-2 text-[12px] leading-relaxed text-faint">
-                        {result.description}
-                      </p>
-                      <p className="mt-1.5 text-[11px] text-faint">
-                        {formatDownloads(result.downloads)} downloads
-                      </p>
-                    </div>
-
-                    {/* Install — the card's action */}
-                    <div className="flex shrink-0 flex-col items-end gap-1 pt-0.5">
-                      <button
-                        onClick={() => handleInstall(result)}
-                        disabled={entry.state === 'installing' || entry.state === 'installed'}
-                        className={`rounded-full border px-4 py-1.5 text-[11px] font-semibold transition-all duration-micro ease-exit ${
-                          entry.state === 'installed'
-                            ? 'border-line bg-transparent text-faint'
-                            : entry.state === 'installing'
-                              ? 'border-ember/30 bg-ember/10 text-ember'
-                              : 'border-ember/40 bg-ember/15 text-ember hover:bg-ember hover:text-[var(--ground)]'
-                        } disabled:cursor-default`}
-                      >
-                        {entry.state === 'installing'
-                          ? 'Installing…'
-                          : entry.state === 'installed'
-                            ? 'Installed'
-                            : 'Install'}
-                      </button>
-                      {entry.state === 'idle' && entry.error && (
-                        <p className="max-w-[150px] text-right text-[10px] leading-tight text-danger/80">
-                          {entry.error}
-                        </p>
+                      ) : (
+                        <svg
+                          width="20"
+                          height="20"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth={1.5}
+                          className="text-faint"
+                        >
+                          <rect x="4" y="4" width="16" height="16" rx="2" />
+                          <path d="M4 10h16" />
+                        </svg>
                       )}
                     </div>
-                  </li>
+
+                    {/* Mod info */}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[14px] font-medium text-ink">{mod.title}</p>
+                      {mod.author && (
+                        <p className="truncate text-[12px] text-faint">by {mod.author}</p>
+                      )}
+                      <p className="mt-1 truncate text-[11px] text-faint">
+                        {formatDownloads(mod.downloads)}
+                      </p>
+                    </div>
+
+                    {/* Install */}
+                    <button
+                      disabled={entry.state === 'installing' || entry.state === 'installed'}
+                      onClick={() => handleInstall(mod)}
+                      className={`shrink-0 rounded-[8px] border px-4 py-2 text-[12px] font-medium transition-all duration-micro ${
+                        entry.state === 'installed'
+                          ? 'border-white/[0.06] text-faint'
+                          : entry.state === 'installing'
+                            ? 'border-white/[0.06] text-faint'
+                            : 'border-white/[0.08] text-dim hover:border-ember/30 hover:bg-ember/10 hover:text-ember'
+                      } disabled:cursor-default`}
+                    >
+                      {entry.state === 'installed'
+                        ? 'Installed'
+                        : entry.state === 'installing'
+                          ? 'Installing...'
+                          : 'Install'}
+                    </button>
+                  </div>
                 );
               })}
-            </ul>
+            </div>
           )}
         </div>
       </div>

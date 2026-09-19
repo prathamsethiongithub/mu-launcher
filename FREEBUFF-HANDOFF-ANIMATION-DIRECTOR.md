@@ -82,7 +82,7 @@ The owner ruled that session 2's perceived-life strategy (amplified continuous b
 
 ## Product context (why this feature exists)
 
-Master Launcher is stabilizing toward "a premium desktop launcher that happens to contain Minecraft". The home-screen Minecraft player is part of the launcher identity, not decoration. The owner's spec (long, given verbatim in chat; not stored as a file) defined a **Home Character Animation Director**: layered animation system for the existing skinview3d player with a strict quality bar — subtle, deliberate, interruptible, never robotic/ADHD. Target reaction: *"Holy shit, he's alive."* Key spec rules: inspect before coding, repo is source of truth, no new dependencies, don't rewrite SkinViewerCanvas from scratch, use existing events (no new IPC), don't slow real launching, stop after implementation (no doc/spec files).
+Ember is stabilizing toward "a premium desktop launcher that happens to contain Minecraft". The home-screen Minecraft player is part of the launcher identity, not decoration. The owner's spec (long, given verbatim in chat; not stored as a file) defined a **Home Character Animation Director**: layered animation system for the existing skinview3d player with a strict quality bar — subtle, deliberate, interruptible, never robotic/ADHD. Target reaction: *"Holy shit, he's alive."* Key spec rules: inspect before coding, repo is source of truth, no new dependencies, don't rewrite SkinViewerCanvas from scratch, use existing events (no new IPC), don't slow real launching, stop after implementation (no doc/spec files).
 
 ## What was built this session
 

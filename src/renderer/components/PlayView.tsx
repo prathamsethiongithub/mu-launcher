@@ -134,6 +134,11 @@ const PlayView: React.FC<PlayViewProps> = ({
   const [showAuthPanel, setShowAuthPanel] = useState(false);
   const [showSwitcher, setShowSwitcher] = useState(false);
   const [serverStatus, setServerStatus] = useState<{ online: boolean; players?: { online: number; max: number } } | null>(null);
+  // THE ORACLE — the active world's last-crash attribution, surfaced as a
+  // warning banner before the user launches again. null = no crash found.
+  const [crashWarning, setCrashWarning] = useState<{ modName?: string; reason?: string } | null>(null);
+  // Mod Update Notifier — count of outdated mods in the active world.
+  const [modUpdateCount, setModUpdateCount] = useState(0);
 
   useEffect(() => { checkAuth(); }, []);
 
@@ -162,6 +167,30 @@ const PlayView: React.FC<PlayViewProps> = ({
     fetchStatus();
     const interval = setInterval(fetchStatus, 30000);
     return () => clearInterval(interval);
+  }, [activeWorld]);
+
+  // THE ORACLE — diagnose the active world's most recent crash on mount and
+  // on every world switch. diagnoseLastCrash never throws; a non-throwing
+  // guard keeps a failed IPC from ever wedging the view.
+  useEffect(() => {
+    if (!activeWorld) return;
+    window.electronAPI.diagnoseWorld(activeWorld.id).then((result) => {
+      if (result.crashed) {
+        setCrashWarning({ modName: result.modName, reason: result.reason });
+      } else {
+        setCrashWarning(null);
+      }
+    }).catch(() => setCrashWarning(null));
+  }, [activeWorld]);
+
+  // Mod Update Notifier — check on mount and on every world switch. The
+  // backend returns the updates array directly; any failure just keeps the
+  // count quiet.
+  useEffect(() => {
+    if (!activeWorld) return;
+    window.electronAPI.checkModUpdates(activeWorld.id).then((result) => {
+      setModUpdateCount(Array.isArray(result) ? result.length : 0);
+    }).catch(() => setModUpdateCount(0));
   }, [activeWorld]);
 
   // Outside-click + Escape close the switcher. Owning this at the eyebrow
@@ -291,7 +320,7 @@ const PlayView: React.FC<PlayViewProps> = ({
             With one world: just the server host (unchanged).
             With ≥2 worlds: the active world's name; a chevron surfaces on hover
             and opens the switcher. One quiet trigger, one interaction. */}
-        {hasMultipleWorlds ? (
+        {hasMultipleWorlds && activeWorld ? (
           <div ref={eyebrowRef} className="rise relative mb-3">
             <button
               onClick={() => canSwitchWorlds && setShowSwitcher((v) => !v)}
@@ -323,9 +352,10 @@ const PlayView: React.FC<PlayViewProps> = ({
             )}
           </div>
         ) : (
-          /* One world: the eyebrow names the place. The address already
-             lives in the rail — never the same fact twice on one stage. */
-          <p className="rise microlabel mb-3 !text-faint">{eyebrowText}</p>
+          /* P2-1: the top bar already carries the brand name — a one-world
+             eyebrow above it only repeats it (or the server host, which the
+             rail already owns). Render nothing on this screen. */
+          null
         )}
 
         {/* ── HERO LAYER — decoupled from the document flow ────────────────────
@@ -426,6 +456,25 @@ const PlayView: React.FC<PlayViewProps> = ({
           <BlurText text={hero} />
         </h1>
 
+        {/* THE ORACLE — crash warning banner. Sits between the hero word and
+            the sub-line so the diagnosis is read BEFORE the call to action.
+            Idle states only — an in-flight launch or a running game must not
+            be interrupted by a stale-crash warning. */}
+        {crashWarning && !launching && !isRunning && (
+          <div className="rise mt-3 flex items-center justify-center gap-3 rounded-[10px] border border-danger/20 bg-danger/5 px-4 py-2">
+            <span className="text-[12px] text-danger">
+              {crashWarning.modName
+                ? `${crashWarning.modName} caused your last crash.`
+                : 'Your last session crashed.'}
+            </span>
+            {crashWarning.modName && (
+              <span className="text-[11px] text-faint">
+                Remove or disable {crashWarning.modName} in Mod Manager.
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Sub-line */}
         <p
           key={sub}
@@ -437,7 +486,7 @@ const PlayView: React.FC<PlayViewProps> = ({
         {/* Live Server Pulse — the place's heartbeat. Hidden until the first
             probe lands so the dot never presents a state nobody measured. */}
         {serverStatus && (
-          <div className="rise d3 mt-2 flex items-center justify-center gap-2 text-[12px] text-faint">
+          <div className="rise d3 mt-2 flex items-center justify-center gap-2 text-[12px] text-dim">
             <span className={`inline-block h-1.5 w-1.5 rounded-full ${serverStatus.online ? 'bg-ember animate-pulse' : 'bg-faint'}`} />
             {serverStatus.online ? (
               <span>{serverStatus.players?.online || 0} / {serverStatus.players?.max || 0} players online</span>
@@ -445,6 +494,13 @@ const PlayView: React.FC<PlayViewProps> = ({
               <span>Your world has been waiting.</span>
             )}
           </div>
+        )}
+
+        {/* Mod Update Notifier — quiet hint between sub-line and the CTA */}
+        {modUpdateCount > 0 && (
+          <p className="rise mt-2 text-[12px] text-faint">
+            {modUpdateCount} mod update{modUpdateCount > 1 ? 's' : ''} available
+          </p>
         )}
 
         {/* The flame — exactly one ember element (Law 1) */}
@@ -485,7 +541,7 @@ const PlayView: React.FC<PlayViewProps> = ({
       </div>
 
       {/* ── Metadata rail: honest, mono, quiet (Laws 3–6) ─────────────────── */}
-      <div className="hairline-t rise d4 relative z-10 flex h-11 shrink-0 items-center justify-center gap-3 px-6 font-mono text-[11px] tabular-nums text-faint">
+      <div className="hairline-t rise d4 relative z-10 flex h-11 shrink-0 items-center justify-center gap-3 px-6 font-mono text-[11px] tabular-nums text-dim">
         <span>MC {railVersion}</span>
         <span aria-hidden>·</span>
         <span>{railLoader}</span>

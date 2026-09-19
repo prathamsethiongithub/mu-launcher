@@ -45,7 +45,7 @@ class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundarySta
 
     return (
       <div className="flex h-screen w-screen flex-col items-center justify-center gap-4 px-10 text-center">
-        <p className="microlabel !text-faint">Master Launcher</p>
+        <p className="microlabel !text-faint">Ember</p>
         <h1 className="max-w-[14ch] text-center font-display text-[56px] font-bold leading-[1.04] tracking-[-0.04em] text-ink [text-wrap:balance]">
           Hit a snag.
         </h1>

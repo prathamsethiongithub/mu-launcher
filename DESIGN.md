@@ -1,4 +1,4 @@
-# EMBER — Master Launcher Design System
+# Ember Design System
 
 > One flame in a dark room.
 > The launcher is a quiet, warm, near-black stage. Exactly one thing burns on it at a time.

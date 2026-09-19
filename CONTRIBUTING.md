@@ -1,4 +1,4 @@
-# Contributing to Master Launcher
+# Contributing to Ember
 
 Thanks for your interest in contributing!
 

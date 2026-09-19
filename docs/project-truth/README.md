@@ -1,11 +1,11 @@
-# PROJECT TRUTH — Master Launcher
+# PROJECT TRUTH — Ember
 
 **Audit date:** 2026-09-13 · **Audit scope:** read-only forensic investigation, documentation output only
 **Worktree audited:** branch `master`, single commit `b450754` ("Pre-canary stable build") plus a large **uncommitted** worktree delta (+1,909/−3,566 across 40 files — see `git status` in 01-ARCHITECTURE §0).
 
 ## What this is
 
-The current mental model of the Master Launcher as it **exists on disk today**. Every load-bearing claim is cited to `file path` + `symbol` (+ line range where practical). Historical documents were treated as evidence only; where code and documents disagree, **source code wins** and the disagreement is recorded in `16-HISTORY-RECONCILIATION.md`.
+The current mental model of Ember as it **exists on disk today**. Every load-bearing claim is cited to `file path` + `symbol` (+ line range where practical). Historical documents were treated as evidence only; where code and documents disagree, **source code wins** and the disagreement is recorded in `16-HISTORY-RECONCILIATION.md`.
 
 ## Claim statuses used throughout
 

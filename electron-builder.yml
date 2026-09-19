@@ -1,4 +1,4 @@
-appId: com.mastersunion.masterlauncher
+appId: com.mastersunion.ember
 artifactName: ${productName}-${version}-${arch}.${ext}
 directories:
   buildResources: build
@@ -13,8 +13,8 @@ nsis:
   deleteAppDataOnUninstall: false
   oneClick: false
   perMachine: false
-  shortcutName: Master Launcher
-productName: Master Launcher
+  shortcutName: Ember
+productName: Ember
 publish:
 - owner: prathamsethiongithub
   provider: github

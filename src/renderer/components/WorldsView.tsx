@@ -256,6 +256,14 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
         // Electron ≥32 removed File.path — resolve through the preload bridge.
         const filePath = window.electronAPI.getPathForFile(file);
         if (!filePath) return;
+        // Only modpack archives are meaningful here — tell the user instead of
+        // silently doing nothing with a stray .txt or .png.
+        const lower = filePath.toLowerCase();
+        if (!lower.endsWith('.mrpack') && !lower.endsWith('.zip')) {
+          setError('Only .mrpack or .zip modpack files are supported.');
+          setTimeout(() => setError(null), 3000);
+          return;
+        }
         const result = await window.electronAPI.parseModpack(filePath);
         if (result.success && result.modpack) {
           setPendingModpack({ ...result.modpack, filePath });
@@ -395,8 +403,10 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
                       Play
                     </button>
                   )}
-                {/* Overflow menu — personal worlds only */}
-                {!isManaged && !isRenaming && !isDeleting && (
+                {/* Overflow menu — all worlds. Managed worlds get a trimmed
+                    menu (Mod Manager / Back up / Backups only) since rename,
+                    duplicate and delete are main-process-forbidden for them. */}
+                {!isRenaming && !isDeleting && (
                   <div className="relative shrink-0" ref={menuOpenId === world.id ? menuRef : null}>
                     <button
                       onClick={(e) => {
@@ -415,6 +425,7 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
                     </button>
                     {menuOpenId === world.id && (
                       <div className="glass absolute right-0 top-full mt-1 z-50 rounded-[10px] p-1 min-w-[140px]">
+                        {!isManaged && (
                         <button
                           onClick={() => { setMenuOpenId(null); setRenamingId(world.id); setRenameValue(world.name); }}
                           className="flex w-full items-center gap-2 rounded-[6px] px-3 py-2 text-left text-[12px] text-dim transition-colors hover:text-ink hover:bg-white/[0.03]"
@@ -422,6 +433,8 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><path d="M11 4H4v16h16v-7M18.5 2.5l3 3L11 16l-4 1 1-4 12.5-12.5z" /></svg>
                           Rename
                         </button>
+                        )}
+                        {!isManaged && (
                         <button
                           onClick={() => handleDuplicate(world.id)}
                           disabled={isLoading}
@@ -430,6 +443,7 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><rect x="8" y="8" width="12" height="12" rx="2" /><path d="M4 16V4h12" /></svg>
                           Duplicate
                         </button>
+                        )}
                         <button
                           onClick={() => handleBackup(world.id)}
                           disabled={isLoading}
@@ -477,6 +491,8 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
                             Repair
                           </button>
                         )}
+                        {!isManaged && (
+                        <>
                         <div className="h-px bg-line my-1" />
                         <button
                           onClick={() => { setMenuOpenId(null); setDeletingId(world.id); }}
@@ -486,6 +502,8 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
                           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
                           Delete
                         </button>
+                        </>
+                        )}
                       </div>
                     )}
                   </div>

@@ -67,7 +67,7 @@ const DockNav: React.FC<DockNavProps> = ({ currentView, onNavigate }) => {
               onClick={() => onNavigate(id)}
               aria-current={active ? 'page' : undefined}
               className={`relative flex items-center gap-2 rounded-full px-4 py-2 text-[12px] font-medium transition-colors duration-micro ease-exit ${
-                active ? 'bg-white/[0.07] text-ink' : 'text-dim hover:text-ink'
+                active ? 'bg-white/[0.07] text-ink' : 'text-dim hover:bg-white/[0.03] hover:text-ink'
               }`}
             >
               {icon}

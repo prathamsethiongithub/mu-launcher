@@ -40,6 +40,8 @@ interface ElectronAPI {
 
   // Auth helpers for launch
   getJavaPath: () => Promise<string>;
+  /** Quick local scan for an installed Java runtime (Setup → Detect). */
+  detectJava: () => Promise<{ success: boolean; path?: string; error?: string }>;
 
   // Java provisioning progress
   onJavaProgress: (callback: (progress: { phase: string; percent: number; message?: string }) => void) => void;
@@ -148,6 +150,21 @@ interface ElectronAPI {
   addMod: (worldId: string, sourceFilePath: string) => Promise<{ success: boolean; error?: string }>;
   /** Native file picker for a mod .jar; resolves to the path or null on cancel. */
   selectModFile: () => Promise<string | null>;
+
+  /** THE ORACLE: read + parse the world's latest crash report. */
+  diagnoseWorld: (worldId: string) =>
+    Promise<{ crashed: boolean; modName?: string; reason?: string; crashTime?: string }>;
+
+  /** Mod Update Notifier: check the world's mods for newer Modrinth releases. */
+  checkModUpdates: (worldId: string) => Promise<import('./main/update-checker').ModUpdateInfo[]>;
+
+  /** Mod Update Notifier: download the new release and remove the old jar. */
+  performModUpdate: (
+    worldId: string,
+    oldFilename: string,
+    downloadUrl: string,
+    newFilename: string
+  ) => Promise<{ success: boolean; error?: string }>;
 
   // ── Modrinth Discover ──
   /** Search Modrinth for mods (game-version/loader facets applied in main). */

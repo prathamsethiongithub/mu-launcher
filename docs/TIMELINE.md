@@ -1,4 +1,4 @@
-# Project Timeline — Master Launcher
+# Project Timeline — Ember
 
 > Chronological record of every development session on this repository, compiled
 > 2026-09-11 from doc timestamps, REPORT/DEBUG records, git history, and session

@@ -23,7 +23,7 @@ Every persisted location, its owner, and behavior on corruption/deletion. `Base 
 | Path | Notes |
 |---|---|
 | `out/main/index.js`, `out/preload/index.js`, `out/renderer/**` | electron-vite build output; preflight-check verifies main+preload exist (L172–190) |
-| `dist/Master Launcher-…-setup.exe` | NSIS installer output (electron-builder) |
+| `dist/Ember-…-setup.exe` | NSIS installer output (electron-builder; `productName: Ember`) |
 | `build/icon.ico` | app icon |
 
 ## CACHE vs SOURCE-OF-TRUTH classification

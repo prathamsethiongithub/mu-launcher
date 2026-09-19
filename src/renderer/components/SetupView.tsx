@@ -1,20 +1,24 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 
 // SetupView — per-instance configuration (memory, runtime, resolution) plus
-// storage housekeeping and build info. Purely presentational for now: the
-// Detect / Open Folder / Clear Cache actions log to console until the main
-// process wiring lands.
+// storage housekeeping and build info. Java "Detect" is wired to the main
+// process; Open Folder / Clear Cache still log to console.
 export const SetupView: React.FC<{ activeWorld: any; onWorldsChanged: () => void }> = ({
   activeWorld,
   onWorldsChanged,
 }) => {
   const [ram, setRam] = useState(activeWorld?.ramAllocation || 4096);
+  // Debounce handle for RAM persistence. A ref — not a plain `let` — so the
+  // timer survives re-renders: a per-render `let` resets to undefined and
+  // every drag tick would leak a live timer (N ticks → N IPC calls).
+  const ramTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [resolution, setResolution] = useState('1920x1080');
   const [cacheConfirm, setCacheConfirm] = useState(false);
+  const [javaPath, setJavaPath] = useState('');
 
   return (
-    <div className="relative z-[1] flex h-full flex-col items-center justify-center px-10 pt-20 pb-24">
-      <div className="w-full max-w-[680px] flex flex-col gap-8">
+    <div className="relative z-[1] flex h-full flex-col items-center justify-center px-10 pt-20 pb-24 pointer-events-none">
+      <div className="w-full max-w-[680px] flex flex-col gap-8 pointer-events-auto">
         {/* ── Block 1: Instance Configuration ─────────────────────────── */}
         <div className="rounded-[12px] border border-white/[0.06] bg-white/[0.02] p-6">
           <p className="microlabel mb-5">Instance Configuration</p>
@@ -30,7 +34,22 @@ export const SetupView: React.FC<{ activeWorld: any; onWorldsChanged: () => void
             max="16384"
             step="512"
             value={ram}
-            onChange={(e) => setRam(Number(e.target.value))}
+            onChange={(e) => {
+              const newRam = Number(e.target.value);
+              setRam(newRam);
+              // Debounced persistence: 500ms after the last drag tick, write
+              // the allocation to the world registry. Without this the value
+              // never left this component — launches used the stale default.
+              clearTimeout(ramTimer.current ?? undefined);
+              ramTimer.current = setTimeout(() => {
+                ramTimer.current = null;
+                if (activeWorld) {
+                  window.electronAPI.updateWorldSettings(activeWorld.id, {
+                    ramAllocation: newRam,
+                  });
+                }
+              }, 500);
+            }}
             className="mu-slider"
           />
 
@@ -38,9 +57,18 @@ export const SetupView: React.FC<{ activeWorld: any; onWorldsChanged: () => void
           <div className="mt-6 flex items-center justify-between">
             <span className="text-[14px] text-dim">Java Runtime</span>
             <div className="flex items-center gap-3">
-              <span className="text-[13px] text-faint">Java 21</span>
+              <span className="text-[13px] text-faint truncate max-w-[220px]" title={javaPath || undefined}>
+                {javaPath ? javaPath : 'Java 21'}
+              </span>
               <button
-                onClick={() => console.log('detect java')}
+                onClick={async () => {
+                  const result = await window.electronAPI.detectJava();
+                  if (result.success) {
+                    setJavaPath(result.path!);
+                  } else {
+                    setJavaPath('Not found');
+                  }
+                }}
                 className="pill-ghost !text-[11px] !px-3 !py-1"
               >
                 Detect
@@ -83,29 +111,29 @@ export const SetupView: React.FC<{ activeWorld: any; onWorldsChanged: () => void
             </button>
           </div>
 
-          {/* Disk usage */}
+          {/* Disk usage — the clear-cache affordance lives on this row
+              (right-aligned beside the usage figure) instead of dangling on
+              its own line below it. */}
           <div className="mt-6 flex items-center justify-between">
             <span className="text-[14px] text-dim">Disk Usage</span>
-            <span className="font-mono text-[12px] text-faint">2.3 GB on disk</span>
-          </div>
-
-          {/* Clear cache — two-click confirm */}
-          <div className="mt-6 flex justify-end">
-            <button
-              onClick={() => {
-                if (cacheConfirm) {
-                  console.log('cache cleared');
-                  setCacheConfirm(false);
-                } else {
-                  setCacheConfirm(true);
-                }
-              }}
-              className={`text-[12px] transition-colors duration-micro ${
-                cacheConfirm ? 'text-danger' : 'text-faint hover:text-danger'
-              }`}
-            >
-              {cacheConfirm ? 'Sure? Click again' : 'Clear Cache'}
-            </button>
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-[12px] text-faint">2.3 GB on disk</span>
+              <button
+                onClick={() => {
+                  if (cacheConfirm) {
+                    console.log('cache cleared');
+                    setCacheConfirm(false);
+                  } else {
+                    setCacheConfirm(true);
+                  }
+                }}
+                className={`ml-auto text-[12px] transition-colors duration-micro ${
+                  cacheConfirm ? 'text-danger' : 'text-faint hover:text-danger'
+                }`}
+              >
+                {cacheConfirm ? 'Sure? Click again' : 'Clear Cache'}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -115,7 +143,7 @@ export const SetupView: React.FC<{ activeWorld: any; onWorldsChanged: () => void
 
           <div className="flex items-center justify-between mt-3">
             <span className="text-[13px] text-dim">Launcher Version</span>
-            <span className="font-mono text-[12px] text-faint">v1.0.0</span>
+            <span className="font-mono text-[12px] text-faint">Ember v1.0.0</span>
           </div>
           <div className="flex items-center justify-between mt-3">
             <span className="text-[13px] text-dim">Electron Version</span>

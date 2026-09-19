@@ -82,6 +82,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * Registers a listener for Java provisioning progress events.
    * Callback receives { phase: string, percent: number, message?: string }.
    */
+  /**
+   * Quick local scan for an installed Java runtime (Setup screen "Detect").
+   * Pure filesystem probing in the main process — never launches anything.
+   */
+  detectJava: (): Promise<{ success: boolean; path?: string; error?: string }> => {
+    return ipcRenderer.invoke('detect-java');
+  },
+
   onJavaProgress: (callback: (progress: { phase: string; percent: number; message?: string }) => void) => {
     ipcRenderer.on('java-progress', (_event, progress) => callback(progress));
   },
@@ -265,6 +273,28 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   /** Native file picker for a mod .jar; resolves to the path or null on cancel. */
   selectModFile: () => ipcRenderer.invoke('select-mod-file') as Promise<string | null>,
+
+  /** THE ORACLE: diagnose the world's most recent crash report. */
+  diagnoseWorld: (worldId: string) =>
+    ipcRenderer.invoke('diagnose-world', worldId) as Promise<{
+      crashed: boolean;
+      modName?: string;
+      reason?: string;
+      crashTime?: string;
+    }>,
+
+  /** Mod Update Notifier: check the world's mods for newer Modrinth releases. */
+  checkModUpdates: (worldId: string) =>
+    ipcRenderer.invoke('check-mod-updates', worldId) as Promise<
+      import('../main/update-checker').ModUpdateInfo[]
+    >,
+
+  /** Mod Update Notifier: download the new release and remove the old jar. */
+  performModUpdate: (worldId: string, oldFilename: string, downloadUrl: string, newFilename: string) =>
+    ipcRenderer.invoke('perform-mod-update', worldId, oldFilename, downloadUrl, newFilename) as Promise<{
+      success: boolean;
+      error?: string;
+    }>,
 
   // ── Modrinth Discover ──────────────────────────────────────────────── ──
 

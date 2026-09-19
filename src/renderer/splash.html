@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Ember</title>
+  <!--
+    THE SPLASH — standalone pre-React loading screen, now a video reveal.
+    One inline file + one local mp4: paints in milliseconds while the main
+    window's 2MB+ renderer bundle still compiles. Shown in a 360x360
+    frameless opaque window (backgroundColor #0b0a09).
+
+    SOUND-FIRST INTRO: the page script calls video.play() with audio before
+    anything else (the window grants audible autoplay via autoplayPolicy).
+    If the platform refuses, the intro falls back to muted playback and a
+    "Click for sound" chip appears — one click anywhere unmutes mid-reveal.
+    The main process polls __splashDone (video ended / failed / unplayable)
+    with its own 8s fallback so a wedged video can never trap the user.
+  -->
+  <style>
+    /* The window is opaque (#0b0a09) and html/body match it: Chromium
+       paints the window backgroundColor before any CSS lands, so page and
+       card are seamless — no white flash on first paint. */
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #0b0a09;
+      overflow: hidden;
+    }
+    .splash {
+      position: relative;
+      box-sizing: border-box;
+      width: 100vw;
+      height: 100vh;
+      background: #0b0a09;
+      border-radius: 16px;
+      overflow: hidden;
+      user-select: none;
+    }
+    .splash.needs-sound { cursor: pointer; }
+    video {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      border-radius: 16px;
+    }
+    /* Shown only when audible autoplay was refused — the click-to-unmute
+       affordance for a reveal that is playing silently. */
+    .sound-hint {
+      position: absolute;
+      left: 50%;
+      bottom: 14px;
+      transform: translateX(-50%);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(20, 17, 15, 0.72);
+      color: #d8d3cc;
+      font: 500 11px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+      letter-spacing: 0.02em;
+      cursor: pointer;
+      transition: background 150ms ease, border-color 150ms ease;
+    }
+    .sound-hint:hover { background: rgba(48, 41, 34, 0.85); border-color: rgba(230, 165, 92, 0.35); }
+    .sound-hint:focus-visible { outline: 2px solid rgba(200, 135, 53, 0.5); outline-offset: 2px; }
+    .sound-hint[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <div class="splash">
+    <!-- No `autoplay`/`muted` attributes: the page script drives playback so
+         the very first attempt is WITH sound. ended/error still flip
+         __splashDone directly as a last-resort signal to the main process. -->
+    <video
+      id="intro"
+      src="./assets/logo video.mp4"
+      playsinline
+      onended="window.__splashDone = true"
+      onerror="window.__splashDone = true"
+    ></video>
+    <button id="soundHint" class="sound-hint" type="button" hidden>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H2v6h4l5 4V5z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/></svg>
+      Click for sound
+    </button>
+  </div>
+  <script>
+    (function () {
+      var video = document.getElementById('intro');
+      var hint = document.getElementById('soundHint');
+      var splash = document.querySelector('.splash');
+
+      // Shared with the main process's belt-and-braces injection: idempotent
+      // via __splashFlowStarted, so a double start is harmless.
+      window.__startIntroFlow = function () {
+        if (window.__splashFlowStarted) return;
+        window.__splashFlowStarted = true;
+        if (!video) { window.__splashDone = true; return; }
+
+        video.addEventListener('ended', function () { window.__splashDone = true; });
+        video.addEventListener('error', function () { window.__splashDone = true; });
+        if (video.error || video.ended) { window.__splashDone = true; return; }
+
+        // 1) Sound first — the window's autoplayPolicy normally allows it.
+        video.muted = false;
+        var audible = video.play();
+        if (audible && typeof audible.catch === 'function') {
+          audible.catch(function () {
+            // A user gesture (click below) may already have started audible
+            // playback between the rejection and this handler — don't mute it.
+            if (!video.paused) return;
+            // 2) Policy said no: muted autoplay always works. Keep the
+            //    reveal moving and offer the click-to-unmute chip.
+            video.muted = true;
+            hint.hidden = false;
+            splash.classList.add('needs-sound');
+            var silent = video.play();
+            if (silent && typeof silent.catch === 'function') {
+              silent.catch(function () { window.__splashDone = true; });
+            }
+          });
+        }
+      };
+
+      // Click anywhere on the splash (chip included): play or unmute with
+      // sound — the gesture unlocks the audio track mid-reveal.
+      splash.addEventListener('click', function () {
+        if (!video || video.error || video.ended) return;
+        hint.hidden = true;
+        splash.classList.remove('needs-sound');
+        video.muted = false;
+        if (video.paused) video.play();
+      });
+
+      window.__startIntroFlow();
+    })();
+  </script>
+</body>
+</html>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import ModrinthBrowser from './ModrinthBrowser';
+import type { ModUpdateInfo } from '../../main/update-checker';
 
 interface ModManagerModalProps {
   worldId: string;
@@ -39,6 +40,10 @@ const ModManagerModal: React.FC<ModManagerModalProps> = ({ worldId, worldName, o
   const [busy, setBusy] = useState<Busy>(null);
   const [adding, setAdding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Mod Update Notifier
+  const [updates, setUpdates] = useState<ModUpdateInfo[]>([]);
+  const [updating, setUpdating] = useState<Set<string>>(new Set());
+  const [updateComplete, setUpdateComplete] = useState(false);
   // Modrinth browser state + the world's version/loader (the browser filters
   // search results and downloads by both).
   const [modrinthOpen, setModrinthOpen] = useState(false);
@@ -54,6 +59,14 @@ const ModManagerModal: React.FC<ModManagerModalProps> = ({ worldId, worldName, o
       setLoadFailed(true);
     } finally {
       setLoading(false);
+    }
+    // Update check rides the same refresh — a failed check just leaves the
+    // banner quiet (checkForUpdates itself skips per-mod failures).
+    try {
+      const found = await window.electronAPI.checkModUpdates(worldId);
+      setUpdates(Array.isArray(found) ? found : []);
+    } catch {
+      setUpdates([]);
     }
   }, [worldId]);
 
@@ -119,6 +132,38 @@ const ModManagerModal: React.FC<ModManagerModalProps> = ({ worldId, worldName, o
     }
   };
 
+  // ── Mod Update Notifier ─────────────────────────────────────────────
+  const handleUpdateOne = async (update: ModUpdateInfo) => {
+    setUpdating((prev) => new Set(prev).add(update.filename));
+    try {
+      const result = await window.electronAPI.performModUpdate(
+        worldId, update.filename, update.downloadUrl, update.newFilename,
+      );
+      if (result.success) {
+        setUpdates((prev) => prev.filter((u) => u.filename !== update.filename));
+        await loadMods();
+      } else {
+        setError('Update failed: ' + (result.error || 'unknown error'));
+      }
+    } catch (err) {
+      setError('Update failed: ' + String(err));
+    } finally {
+      setUpdating((prev) => {
+        const s = new Set(prev);
+        s.delete(update.filename);
+        return s;
+      });
+    }
+  };
+
+  const handleUpdateAll = async () => {
+    for (const update of updates) {
+      await handleUpdateOne(update);
+    }
+    setUpdateComplete(true);
+    setTimeout(() => setUpdateComplete(false), 3000);
+  };
+
   // Opens the Modrinth browser: resolves the world's version/loader once so
   // the search facets target THIS world's MC version and loader.
   const openModrinth = async (): Promise<void> => {
@@ -136,7 +181,7 @@ const ModManagerModal: React.FC<ModManagerModalProps> = ({ worldId, worldName, o
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="surface panel-in relative m-4 flex max-h-[80vh] w-full max-w-[520px] flex-col rounded-[18px] p-8">
+      <div className="surface panel-in relative m-4 flex max-h-[85vh] w-full max-w-[520px] flex-col rounded-[18px] p-8">
         {/* Close */}
         <button
           onClick={onClose}
@@ -146,24 +191,46 @@ const ModManagerModal: React.FC<ModManagerModalProps> = ({ worldId, worldName, o
           &times;
         </button>
 
+        {/* Header */}
         <p className="microlabel mb-3">Mod Manager</p>
-        <h2 className="font-display text-[24px] font-bold tracking-[-0.03em] text-ink">
+        <h2 className="font-display text-[22px] font-bold tracking-[-0.03em] text-ink">
           {worldName}
         </h2>
         <p className="mt-1.5 text-[12px] leading-relaxed text-faint">
           Disable a mod without uninstalling it — the file is renamed, not removed.
         </p>
 
+        {/* Mod Update Notifier — banner above the list */}
+        {updates.length > 0 && (
+          <div className="mb-4 flex items-center justify-between rounded-[10px] border border-ember/20 bg-ember/[0.03] px-4 py-3">
+            <span className="text-[13px] text-ember">
+              {updates.length} mod update{updates.length > 1 ? 's' : ''} available
+            </span>
+            <button
+              onClick={handleUpdateAll}
+              disabled={updating.size > 0}
+              className="rounded-[7px] border border-ember/40 bg-ember/10 px-3 py-1.5 text-[12px] font-medium text-ember transition-all duration-150 hover:bg-ember/20 disabled:opacity-40"
+            >
+              Update All
+            </button>
+          </div>
+        )}
+        {updateComplete && (
+          <div className="mb-4 rounded-[10px] border border-white/[0.06] bg-white/[0.02] px-4 py-3">
+            <span className="text-[13px] text-dim">All mods are up to date.</span>
+          </div>
+        )}
+
         {/* List */}
         <div className="mt-6 min-h-0 flex-1 overflow-y-auto pr-1">
           {loading ? (
-            <div className="flex items-center gap-2.5 py-10">
+            <div className="flex items-center justify-center gap-2.5 py-10">
               <div className="dot-breathe h-[5px] w-[5px] rounded-full bg-ember" />
               <p className="microlabel">Loading mods</p>
             </div>
           ) : loadFailed ? (
             <div className="py-10 text-center">
-              <p className="text-[12px] text-danger/80">Couldn't load the mod list.</p>
+              <p className="text-[13px] text-faint">Couldn&apos;t load the mod list.</p>
               <button
                 onClick={retryLoad}
                 className="mt-2 text-[12px] font-medium text-ember transition-colors duration-micro hover:text-ember-deep"
@@ -173,45 +240,71 @@ const ModManagerModal: React.FC<ModManagerModalProps> = ({ worldId, worldName, o
             </div>
           ) : mods.length === 0 ? (
             <div className="py-10 text-center">
-              <p className="text-[13px] text-dim">No mods yet.</p>
+              <p className="text-[13px] text-faint">No mods yet.</p>
               <p className="mt-1 text-[12px] text-faint">
-                Add a .jar below to install your first mod.
+                Install from Modrinth or add a local <code className="font-mono">.jar</code>.
               </p>
             </div>
           ) : (
-            <ul className="flex flex-col">
+            <ul className="flex flex-col gap-2">
               {mods.map((mod) => (
                 <li
                   key={mod.filename}
-                  className="group flex items-center gap-3 rounded-[10px] border border-white/[0.06] px-4 py-3 transition-colors duration-micro hover:border-white/[0.12]"
+                  className="group flex items-center gap-4 rounded-[10px] border border-white/[0.06] bg-white/[0.015] px-4 py-3 transition-all duration-micro ease-exit hover:border-white/[0.10]"
                 >
                   <div className="min-w-0 flex-1">
                     <p
-                      className={`truncate text-[13px] font-medium transition-colors duration-micro ${
+                      className={`truncate text-[14px] font-medium transition-colors duration-micro ${
                         mod.enabled ? 'text-ink' : 'text-faint line-through'
                       }`}
                     >
                       {mod.displayName || mod.filename}
                     </p>
                     <p className="mt-0.5 truncate text-[11px] text-faint">
-                      {mod.filename} · {formatSize(mod.size)}
+                      {formatSize(mod.size)}
                     </p>
                   </div>
 
-                  {/* Toggle — per-row disabled state, list-wide untouched */}
+                  {/* Mod Update Notifier — version delta + one-click update */}
+                  {(() => {
+                    const modUpdate = updates.find((u) => u.filename === mod.filename);
+                    if (!modUpdate) return null;
+                    if (updating.has(mod.filename)) {
+                      return <span className="shrink-0 text-[11px] text-faint">Updating…</span>;
+                    }
+                    return (
+                      <div className="flex shrink-0 flex-col items-end gap-1">
+                        <span className="text-[11px] text-faint tabular-nums">
+                          {modUpdate.currentVersion} → <span className="text-ember">{modUpdate.latestVersion}</span>
+                        </span>
+                        <button
+                          onClick={() => handleUpdateOne(modUpdate)}
+                          className="rounded-[7px] border border-ember/30 px-3 py-1 text-[11px] text-ember transition-all duration-150 hover:bg-ember/10"
+                        >
+                          Update
+                        </button>
+                      </div>
+                    );
+                  })()}
+
+                  {/* Toggle — the shared switch spec: bordered track, ember
+                      when on, per-row busy disable, cubic-bezier knob glide. */}
                   <button
+                    type="button"
                     role="switch"
                     aria-checked={mod.enabled}
                     aria-label={mod.enabled ? `Disable ${mod.displayName}` : `Enable ${mod.displayName}`}
-                    disabled={busy !== null || adding}
+                    disabled={busy?.filename === mod.filename}
                     onClick={() => handleToggle(mod)}
-                    className={`relative h-[20px] w-[36px] shrink-0 rounded-full transition-colors duration-micro disabled:opacity-40 ${
-                      mod.enabled ? 'bg-ember/80' : 'bg-white/[0.08]'
+                    className={`relative flex h-[22px] w-[38px] shrink-0 items-center rounded-full border transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[#C88735]/70 disabled:opacity-40 ${
+                      mod.enabled
+                        ? 'border-[#C88735]/70 bg-[#C88735]/90'
+                        : 'border-white/[0.10] bg-white/[0.06] hover:border-white/[0.16] hover:bg-white/[0.08]'
                     }`}
                   >
                     <span
-                      className={`absolute top-[2px] h-[16px] w-[16px] rounded-full bg-white shadow transition-all duration-micro ${
-                        mod.enabled ? 'left-[18px]' : 'left-[2px]'
+                      className={`absolute top-[3px] size-4 rounded-full bg-white shadow-none transition-transform duration-150 ease-[cubic-bezier(0.22,1,0.36,1)] ${
+                        mod.enabled ? 'translate-x-[18px]' : 'translate-x-[3px]'
                       }`}
                     />
                   </button>
@@ -251,13 +344,13 @@ const ModManagerModal: React.FC<ModManagerModalProps> = ({ worldId, worldName, o
           </button>
           <div className="flex items-center gap-3">
             <button
-              className="pill-ghost !border-ember/30 !text-ember hover:!border-ember/60 hover:!text-ember"
+              className="rounded-[7px] border border-white/[0.08] px-3 h-8 text-[12px] text-white/60 transition-colors duration-micro hover:border-[#C88735]/60 hover:bg-[#C88735]/10 hover:text-[#C88735]"
               onClick={openModrinth}
             >
               Browse Modrinth
             </button>
             <button
-              className="pill-ghost !border-ember/30 !text-ember hover:!border-ember/60 hover:!text-ember"
+              className="rounded-[7px] border border-white/[0.08] px-3 h-8 text-[12px] text-white/60 transition-colors duration-micro hover:border-[#C88735]/60 hover:bg-[#C88735]/10 hover:text-[#C88735] disabled:opacity-40 disabled:hover:border-white/[0.08] disabled:hover:bg-transparent disabled:hover:text-white/60"
               onClick={handleAdd}
               disabled={adding || busy !== null}
             >
@@ -272,6 +365,7 @@ const ModManagerModal: React.FC<ModManagerModalProps> = ({ worldId, worldName, o
         {modrinthOpen && worldInfo && (
           <ModrinthBrowser
             worldId={worldId}
+            worldName={worldName}
             worldVersion={worldInfo.version}
             worldLoader={worldInfo.loader}
             onClose={() => setModrinthOpen(false)}

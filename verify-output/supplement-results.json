@@ -1,0 +1,4 @@
+[
+  "P1-2: rest=none | hover=matrix(1.05, 0, 0, 1.05, 0, 0) filter=brightness(1.15) drop-shadow(rgba(230, 165, 92, 0.5) 0px 0px 12px) | active=matrix(0.97, 0, 0, 0.97, 0, 0) → FIXED",
+  "P1-7: rest bg=rgba(0, 0, 0, 0) color=rgb(156, 149, 138) | hover bg=rgba(255, 255, 255, 0.03) color=rgb(244, 241, 234) | classes=[\"hover:bg-white/[0.03]\",\"hover:text-ink\"] → FIXED"
+]

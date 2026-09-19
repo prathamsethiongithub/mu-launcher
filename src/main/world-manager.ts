@@ -400,7 +400,11 @@ export class WorldManager {
     if (!world) return 'corrupted';
 
     const root = this.resolveRoot(world);
-    if (!existsSync(root)) return 'corrupted';
+    // A missing root means the world has never been launched (roots are
+    // created on demand at launch time). An unlaunched world has nothing to
+    // corrupt — reporting 'corrupted' here put a false CORRUPTED badge on
+    // every fresh install.
+    if (!existsSync(root)) return 'healthy';
 
     const savesDir = join(root, 'saves');
     if (!existsSync(savesDir)) return 'healthy'; // No saves = nothing to corrupt

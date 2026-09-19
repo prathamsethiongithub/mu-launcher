@@ -182,7 +182,7 @@ const NewWorldDialog: React.FC<NewWorldDialogProps> = ({ onClose, onCreated }) =
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
-      <div className="surface panel-in relative m-4 w-full max-w-[420px] rounded-[18px] p-8">
+      <div className="surface panel-in relative m-4 flex max-h-[85vh] w-full max-w-[420px] flex-col overflow-hidden rounded-[18px] p-8">
         {/* Close */}
         <button
           onClick={onClose}
@@ -197,6 +197,8 @@ const NewWorldDialog: React.FC<NewWorldDialogProps> = ({ onClose, onCreated }) =
           Make a space of your own.
         </h2>
 
+        {/* Scrollable form region — action buttons stay pinned below */}
+        <div className="min-h-0 flex-1 overflow-y-auto pr-2">
         {/* Name */}
         <div className="mt-6">
           <label className="microlabel mb-2 block">Name</label>
@@ -324,8 +326,19 @@ const NewWorldDialog: React.FC<NewWorldDialogProps> = ({ onClose, onCreated }) =
               const selectedPath = await window.electronAPI.selectDirectory();
               if (selectedPath) setSettingsPath(selectedPath);
             }}
-            className="w-full rounded-[10px] border border-white/[0.06] bg-white/[0.03] px-4 py-3 text-left text-[13px] text-faint transition-colors hover:border-white/[0.12]"
+            className="flex w-full items-center rounded-[10px] border border-white/[0.06] bg-white/[0.03] px-4 py-3 text-left text-[13px] text-dim transition-colors hover:border-white/[0.12]"
           >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              className="mr-2 shrink-0 text-faint"
+            >
+              <path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+            </svg>
             {settingsPath
               ? `From: ${settingsPath.split(/[\\/]/).pop()}`
               : 'Choose an existing instance folder...'}
@@ -342,6 +355,7 @@ const NewWorldDialog: React.FC<NewWorldDialogProps> = ({ onClose, onCreated }) =
             Copies FOV, keybinds and mod config from an existing install so you
             don't set everything up again.
           </p>
+        </div>
         </div>
 
         {/* Error */}
@@ -361,7 +375,7 @@ const NewWorldDialog: React.FC<NewWorldDialogProps> = ({ onClose, onCreated }) =
           <button
             className="pill-ember"
             onClick={handleCreate}
-            disabled={creating || !name.trim() || mcVersions.length === 0}
+            disabled={creating || mcVersions.length === 0}
           >
             {creating ? 'Creating…' : 'Create'}
           </button>

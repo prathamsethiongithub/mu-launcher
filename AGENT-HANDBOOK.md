@@ -1,4 +1,4 @@
-# AGENT HANDBOOK — Master Launcher
+# AGENT HANDBOOK — Ember
 
 > **Read this before touching code.** It condenses everything an agent (or a new
 > human) needs to work on this repo without re-deriving it. Written 2026-09-11.
