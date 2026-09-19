@@ -54,7 +54,7 @@ function assertSafeJarFilename(name: string): void {
  * position; wholly unparseable pairs fall back to plain inequality (spec
  * behaviour) so exotic version schemes still surface as updates.
  */
-function isNewerVersion(latest: string, current: string): boolean {
+export function isNewerVersion(latest: string, current: string): boolean {
   if (latest === current) return false;
   const l = latest.split(/[.+-]/);
   const c = current.split(/[.+-]/);

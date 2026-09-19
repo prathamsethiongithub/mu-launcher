@@ -98,7 +98,7 @@ export async function diagnoseLastCrash(worldRootPath: string): Promise<CrashDia
  *   2. `Mixin apply failed` — Fabric's signature for an incompatible mod.
  *   3. `java.lang.OutOfMemoryError` — not a mod at all, just RAM starvation.
  */
-function detectReason(head: string): string | null {
+export function detectReason(head: string): string | null {
   const causedBy = head.match(/^[ \t]*(?:\/\/[ \t]*)?Caused by:[ \t]*(.+)$/m);
   if (causedBy) {
     const line = causedBy[1].trim();
@@ -118,7 +118,7 @@ function detectReason(head: string): string | null {
  *   3. A stack-trace class outside the game's own packages — its package
  *      prefix (e.g. `net.sodium` from `net.sodium.client.X`) is the mod.
  */
-function detectModName(head: string): string | undefined {
+export function detectModName(head: string): string | undefined {
   // 1. Mixin config: "Mixin apply failed: sodium.mixins.json:client.json ..."
   const mixin = head.match(/([A-Za-z][\w-]*)\.mixins\.json/);
   if (mixin) return prettifyModId(mixin[1]);
@@ -156,7 +156,7 @@ function detectModName(head: string): string | undefined {
 }
 
 /** "sodium" → "Sodium"; "sodium-extra" → "Sodium Extra". */
-function prettifyModId(modId: string): string {
+export function prettifyModId(modId: string): string {
   const cleaned = modId.replace(/[_-]+/g, ' ').trim();
   if (!cleaned) return modId;
   return cleaned

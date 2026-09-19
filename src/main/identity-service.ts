@@ -13,6 +13,71 @@ const IDENTITY_FILE = 'identity.json';
 const TOKENS_FILE = 'identity-tokens.bin';
 
 /**
+ * Pure session-expiry decision, extracted from validateSession so the state
+ * machine is testable without electron/safeStorage. One production call
+ * site: validateSession. Behaviour contract: `just expired` means
+ * `now >= expiresAt` (equality counts as expired — refresh is preferred
+ * over launching on a token that dies this instant).
+ */
+export function isSessionExpired(
+  session: Pick<Session, 'expiresAt'> | null | undefined,
+  now: number,
+): boolean {
+  if (!session?.expiresAt) return false;
+  return now >= new Date(session.expiresAt).getTime();
+}
+
+/**
+ * Pure branch selector for the session machine, extracted from
+ * validateSession/ensureValidSession: offline accounts are always valid;
+ * Microsoft accounts need stored tokens; nothing validatable → tell the
+ * user to sign in again. One production call site: validateSession.
+ */
+export function sessionDecision(
+  accountType: Account['type'],
+  session: Pick<Session, 'refreshToken'> | null | undefined,
+): { valid: true } | { valid: false; error: string } {
+  if (accountType === 'offline') return { valid: true };
+  if (!session || !session.refreshToken) {
+    return { valid: false, error: 'No session tokens. Please sign in again.' };
+  }
+  return { valid: true };
+}
+
+/**
+ * Pure remove-path guard, extracted from removeAccount: which session
+ * stores must be cleared when an account disappears. Encoded here so the
+ * two-store invariant (state.sessions AND the encrypted token map) is
+ * visible and testable in one place. One production call site: removeAccount.
+ */
+export function removalCleanupScope(accountId: string | null): {
+  deleteStateSession: boolean;
+  deleteEncryptedToken: boolean;
+  reassignActive: boolean;
+} {
+  const matched = accountId != null;
+  return {
+    deleteStateSession: matched,
+    deleteEncryptedToken: matched,
+    reassignActive: matched,
+  };
+}
+
+/**
+ * Minecraft's offline UUID: UUID v3 (MD5) of "OfflinePlayer:" + username.
+ * Extracted from the IdentityService method so the name→UUID contract is
+ * testable without electron; the method delegates unchanged.
+ */
+export function generateOfflineUUID(username: string): string {
+  const hash = createHash('md5').update('OfflinePlayer:' + username).digest();
+  // Set version 3 and variant
+  hash[6] = (hash[6] & 0x0f) | 0x30;
+  hash[8] = (hash[8] & 0x3f) | 0x80;
+  const hex = hash.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
  * IdentityService — owns the account registry, sessions, and skin state.
  *
  * Storage:
@@ -62,11 +127,12 @@ export class IdentityService {
     const account = this.state.accounts.find((a) => a.id === accountId);
     if (!account) return { success: false, error: 'Account not found.' };
 
+    const scope = removalCleanupScope(accountId);
     this.state.accounts = this.state.accounts.filter((a) => a.id !== accountId);
-    delete this.state.sessions[accountId];
-    this.encryptedTokens.delete(accountId);
+    if (scope.deleteStateSession) delete this.state.sessions[accountId];
+    if (scope.deleteEncryptedToken) this.encryptedTokens.delete(accountId);
 
-    if (this.state.activeAccountId === accountId) {
+    if (scope.reassignActive && this.state.activeAccountId === accountId) {
       this.state.activeAccountId = this.state.accounts[0]?.id;
     }
 
@@ -281,26 +347,18 @@ export class IdentityService {
     const account = this.state.accounts.find((a) => a.id === accountId);
     if (!account) return { valid: false, error: 'Account not found.' };
 
-    if (account.type === 'offline') {
-      return { valid: true };
-    }
+    const decision = sessionDecision(account.type, this.encryptedTokens.get(accountId));
+    if (!decision.valid) return decision;
 
+    // Check expiry (pure decision extracted above; equality = expired)
     const session = this.encryptedTokens.get(accountId);
-    if (!session || !session.refreshToken) {
-      return { valid: false, error: 'No session tokens. Please sign in again.' };
-    }
-
-    // Check expiry
-    if (session.expiresAt) {
-      const expires = new Date(session.expiresAt).getTime();
-      if (Date.now() >= expires) {
-        // Try refresh
-        try {
-          await this.refreshMicrosoftSession(accountId);
-          return { valid: true };
-        } catch (err) {
-          return { valid: false, error: 'Session expired. Please sign in again.' };
-        }
+    if (isSessionExpired(session, Date.now())) {
+      // Try refresh
+      try {
+        await this.refreshMicrosoftSession(accountId);
+        return { valid: true };
+      } catch (err) {
+        return { valid: false, error: 'Session expired. Please sign in again.' };
       }
     }
 
@@ -508,13 +566,7 @@ export class IdentityService {
   }
 
   private generateOfflineUUID(username: string): string {
-    // Minecraft's offline UUID: UUID v3 with "OfflinePlayer:" + username
-    const hash = createHash('md5').update('OfflinePlayer:' + username).digest();
-    // Set version 3 and variant
-    hash[6] = (hash[6] & 0x0f) | 0x30;
-    hash[8] = (hash[8] & 0x3f) | 0x80;
-    const hex = hash.toString('hex');
-    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+    return generateOfflineUUID(username);
   }
 
   // ── Persistence ─────────────────────────────────────────────────────
