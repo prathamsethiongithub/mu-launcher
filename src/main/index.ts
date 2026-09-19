@@ -1554,7 +1554,9 @@ function registerIpcHandlers(): void {
   ipcMain.handle('skins-wearing-hash', async (_event, accountId: string) => {
     if (!identityService) return { hash: null };
     try {
-      const skin = await identityService.getSkin(accountId);
+      // force: true — the "active" mark must reflect the skin the account is
+      // wearing RIGHT NOW, not a 24h-cached snapshot (Stage 1 decision).
+      const skin = await identityService.getSkin(accountId, { force: true });
       if (!skin?.skinUrl?.startsWith('data:image/png;base64,')) return { hash: null };
       const bytes = Buffer.from(skin.skinUrl.slice('data:image/png;base64,'.length), 'base64');
       return { hash: sha1Hex(bytes) };
