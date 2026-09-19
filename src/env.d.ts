@@ -200,6 +200,10 @@ interface ElectronAPI {
   /** Upload the previously selected skin file for an account. */
   uploadSkin: (accountId: string, model: string) => Promise<{ success: boolean; error?: string; skin?: SkinProfile }>;
 
+  // ── Skin sync (equip → all views) ──────────────────────────────────────
+  onSkinChanged: (callback: (payload: { accountId: string; model: 'classic' | 'slim'; changedAt: string }) => void) => void;
+  removeSkinChangedListeners: () => void;
+
   // ── Skin Library (Identity Studio) ─────────────────────────────────────
   /** Saved skin entry; dataUrl = its PNG (null → the file is missing). */
   skinsList: () => Promise<{

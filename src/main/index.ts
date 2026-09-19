@@ -18,7 +18,7 @@ import { initTray, disposeTray } from './tray-manager';
 import { diagnoseLastCrash } from './crash-diagnostic';
 import { checkForUpdates, performUpdate } from './update-checker';
 import { IdentityService } from './identity-service';
-import { SkinLibrary, sha1Hex } from './skin-library';
+import { SkinLibrary, sha1Hex, shouldWriteThroughCache, buildSkinChangedPayload } from './skin-library';
 import type { Account, LoaderType } from '../shared/types';
 
 // ── Process-level error shielding ───────────────────────────────────────
@@ -287,6 +287,22 @@ function notifyAuthChanged(): void {
     mainWindow.webContents.send('auth-changed', payload);
   } catch (err) {
     console.error('[auth-sync] notifyAuthChanged failed:', err);
+  }
+}
+
+/**
+ * Same event pattern as notifyAuthChanged, for skins: equip is a main-process
+ * mutation that makes every renderer view's cached skin stale, so after a
+ * successful equip we broadcast. Views re-pull through the normal getSkin
+ * bridge — the write-through below means that pull hits the fresh cache with
+ * zero extra network traffic.
+ */
+function notifySkinChanged(accountId: string, model: 'classic' | 'slim'): void {
+  try {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send('skin-changed', buildSkinChangedPayload(accountId, model));
+  } catch (err) {
+    console.error('[skin-sync] notifySkinChanged failed:', err);
   }
 }
 
@@ -1535,7 +1551,24 @@ function registerIpcHandlers(): void {
     if (!skinLibrary.fileExists(skinId)) {
       return { success: false, code: 'missing', error: 'That skin’s file is missing. Delete it and re-add.' };
     }
-    return identityService.uploadSkin(account.id, skinLibrary.filePath(skinId), skin.model);
+    const result = await identityService.uploadSkin(account.id, skinLibrary.filePath(skinId), skin.model);
+
+    // Write-through (spec §2.1): put the equipped library bytes straight into
+    // the skin-service 24h cache. uploadSkin already does this internally with
+    // the same bytes when account.uuid exists — this explicit write keeps the
+    // guarantee at the equip site (and covers a missing-uuid upload, where
+    // uploadSkin skips its own cache write).
+    const uuid = account.uuid;
+    if (result.success && shouldWriteThroughCache(uuid) && uuid) {
+      try {
+        const bytes = readFileSync(skinLibrary.filePath(skinId));
+        new SkinService().putCache(uuid, bytes, skin.model === 'slim' ? 'slim' : 'default');
+      } catch (err) {
+        console.warn('[skin-sync] cache write-through failed (broadcast still sent):', err);
+      }
+      notifySkinChanged(account.id, skin.model);
+    }
+    return result;
   });
 
   /** 'skins-reveal' — Shows the library PNG in Explorer. */

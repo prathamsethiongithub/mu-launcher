@@ -140,6 +140,11 @@ const PlayView: React.FC<PlayViewProps> = ({
   const [crashWarning, setCrashWarning] = useState<{ modName?: string; reason?: string } | null>(null);
   // Mod Update Notifier — count of outdated mods in the active world.
   const [modUpdateCount, setModUpdateCount] = useState(0);
+  // Skin sync — bump to remount PlayerIdentity so the hero re-pulls the
+  // worn skin (hit the fresh write-through cache, zero network) after an
+  // equip in the Identity Studio. The view is keep-alive: without this,
+  // the hero's skin would stay stale in memory forever.
+  const [playerSkinEpoch, setPlayerSkinEpoch] = useState(0);
 
   useEffect(() => { checkAuth(); }, []);
 
@@ -193,6 +198,16 @@ const PlayView: React.FC<PlayViewProps> = ({
       setModUpdateCount(Array.isArray(result) ? result.length : 0);
     }).catch(() => setModUpdateCount(0));
   }, [activeWorld]);
+
+  // Skin sync — a successful equip in the Identity Studio must reach the hero
+  // immediately: remount PlayerIdentity (keep-alive means it never re-fetches
+  // on its own) so it re-pulls the skin through the written-through cache.
+  useEffect(() => {
+    window.electronAPI.onSkinChanged(() => {
+      setPlayerSkinEpoch((e) => e + 1);
+    });
+    return () => window.electronAPI.removeSkinChangedListeners();
+  }, []);
 
   // Outside-click + Escape close the switcher. Owning this at the eyebrow
   // wrapper — which contains BOTH the trigger and the popover — is what makes
@@ -441,7 +456,7 @@ const PlayView: React.FC<PlayViewProps> = ({
               />
             </div>
             <div className="absolute left-0 top-0 w-full" style={{ height: HERO_CANVAS }}>
-              <PlayerIdentity energetic={launching} />
+              <PlayerIdentity key={playerSkinEpoch} energetic={launching} />
             </div>
           </div>
         )}

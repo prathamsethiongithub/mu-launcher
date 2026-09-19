@@ -57,3 +57,89 @@
 2. **"active" 判定依赖 24h 皮肤缓存**：`skinsWearingHash` 走 `skinService.getSkin`（缓存优先）。若用户在 launcher 外改皮肤且缓存未过期，hash 可能滞后至多 24h。如需强一致可改为 `getSkin(accountId, { force: true })`（代价：每次进入 Studio 一次 Mojang 往返）——留用户决策。
 3. **`import { randomUUID } from 'node:crypto'`** 用于皮肤 id —— 未沿用任何既有 id 生成器（identity-service 的 UUID 是离线账户语义）；如仓库希望统一 id 生成入口，需一处小改。
 4. **`nul` 文件**（仓库根，Windows 保留名）仍在，无法 git 追踪；见 18 号文档遗留备注。
+
+---
+
+# Stage 1 — Ritual Layer（Euphoria 1/4）
+
+分支：`euphoria-stage-1`（自 identity-studio HEAD `3c4be81` 起；按用户指令 C，**不从 master 分支、完成后不并入 master**）。
+前置偏差已获用户授权（选 C）：master 未并入 identity-studio，故分支基点是 identity-studio；其上的预备 commit `28c7d3a`（决策项 2 落地）先于分支创建。
+
+> **🔊 音效否决提示（显著标注）**：货架/装备的程序化音效**默认开启**（WebAudio 合成，零素材零依赖，音量贴地：equip swell ≤250ms / gain 0.12，tick ≤60ms / gain 0.06）。要关掉只需说 **"音效关掉"**——我会把 `src/renderer/studio-audio.ts` 顶部的 `STUDIO_SOUND_ENABLED` 置 false，一行提交。
+
+## 1. 结果表
+
+| 任务 | 状态 | commit | 证据（关键代码/行为） |
+|---|---|---|---|
+| 前置：force-fetch worn skin（决策项 2 落地） | 已完成（identity-studio 上） | `28c7d3a` | `getSkin(accountId, { force: true })` + 注释 *"the 'active' mark must reflect the skin the account is wearing RIGHT NOW, not a 24h-cached snapshot"* |
+| 纯逻辑测试先行 | 已完成 | `fed7bfb` | tests/studio-ritual.test.ts：formatWearingSince 6 分支（today/yesterday 含本地午夜边界/星期/日期/clamp 未来）、Mirror 门（恰 6h 触发、差 1 分钟不触发、会话内不重复、首访不触发）、isFirstSkin（仅 0→≥1）、classifyStudioVisit 全分支（含空=pleasure、未知动作忽略） |
+| 任务 1 "wearing since" | 已完成 | `b2a64e4` | hero 名字下 `formatWearingSince(Date.parse(wornEntry.lastEquippedAt))`；仅当未预览且库内 worn 条目存在 `lastEquippedAt` 才显示（`wornEntry = wearingHash ? skins.find(s => s.hash === wearingHash) : null`）——不猜、缺失不显示 |
+| 任务 2 Mirror Moment | 已完成 | `b2a64e4` | `hasReturnedAfterAbsence(last, now, mirrorShownThisSession)` 通过 → `setMirrorEpoch(e => e+1)`（hero 以 `key={mirrorEpoch}` 重挂载 → 既有 onShown() GREETING 波浪，与 equip 同一公共入口）+ `hey, <username>.` 5s 淡出；`lastVisit` 本地持久化（localStorage），模块级 `mirrorShownThisSession` 保证每会话最多一次 |
+| 任务 3 首件皮肤仪式 | 已完成 | `b2a64e4` | import / save-current 成功路径捕获 beforeCount → `isFirstSkin(before, after)` → GREETING（同上重挂载）+ `"saved. first of many."`（ember 色）+ 首卡弹性入场（先 `scale-95 opacity-0`，双 rAF 后翻至 `scale-100`，走既有 120/300ms + ease-exit）——仅 0→≥1 触发一次，此后永不 |
+| 任务 4 货架手感 | 已完成 | `b2a64e4` | 卡片 hover：`hover:-translate-y-1 hover:rotate-[1.2deg]`（120ms micro）；选中环：`border-ember/60` 已带 duration-micro 过渡；active 下划线：`scale-x-0 → scale-x-100` + `origin-left` + `duration-300 ease-exit`（既有缓动的软落位）；纯 transform/CSS，零新变量，布局结构未动 |
+| 任务 5 微音效 | 已完成（默认开启，待否决） | `b2a64e4` | src/renderer/studio-audio.ts：equip swell `gain.linearRampToValueAtTime(0.12)` 250ms；tick `0.06` 60ms；`ctx.resume().catch()` + `if (ctx.state !== 'running') return null`（挂起静默跳过）；全部 try/catch 包裹，绝不抛错 |
+| 任务 6 愉悦传感器 | 已完成（本地私有） | `b2a4e4`→`b2a64e4` | 挂载读取 lastVisit/写 visit 戳；动作经 `recordAction()` 入 ref；unmount 时 `classifyStudioVisit(actions)` 分类并追加到 `identity-studio-visit-log`（本地 localStorage，上限 200 条，无网络、无 UI 展示） |
+
+## 2. 传感器说明（NSM）
+
+- 数据形态：`[{ ts, kind: 'pleasure'|'task'|'mixed' }]`，仅存于本机 localStorage（`identity-studio-visit-log`，滚动保留 200 条）。
+- 语义：pleasure = 衣柜互动（equip/导入/保存/改名/换模型）或纯浏览；task = 删除/显示文件夹；mixed = 混合。未知动作不猜测。
+- **永不离开本机**：无网络上传、无遥测、无 UI 展示；仅作为未来 NSM 统计的本地原料。
+- 已知边界：传感器按"组件挂载周期"记一次访问——若用户在 Studio 内停留期间导航再返回，会记为两次访问（React unmount 语义），NSM 分母略偏大；保持现状，未做会话级去重（如需可后续把日志窗口改为会话键）。
+
+## 3. 绿灯
+
+- 每个 commit 前：`npm run typecheck` ✓ + `npm run build` ✓（✓ built）。
+- 最终：`npm test` → **Test Files 7 passed (7)，Tests 99 passed (99)**（Stage 1 新增 19 用例：80 → 99）。
+
+## 4. 遗留与备注
+
+- **未自行合并 master**：按用户指令 C，工作停在 `euphoria-stage-1`；合并由用户在主仓库审计后统一执行。
+- fx/ 改动累计（均经用户授权）：`interactive`/`onOrbitStart`（Studio 轨道旋转）——Stage 1 未再触碰 fx/（Mirror Moment 通过 key 重挂载走公共 onShown 入口）。
+- `firstInId` 双 rAF 翻转依赖浏览器合成帧；reduced-motion 下入场仍可用（transition 被全局关闭，皮肤立即可见）。
+- 无 NEEDS DECISION 新增项。
+
+---
+
+# Stage 1 补遗 — equip 全应用同步修复（用户真机报告缺陷）
+
+现象（真机）：Studio equip 成功（"wearing it now."，Mojang 上传成功），返回 Play 视图皮肤仍是旧值。
+commit：`a3296e8`（fix(skins): propagate equip across views via cache write-through and skin-changed event）
+
+## 根因核实表
+
+| 假设 | 成立？ | 证据（行号以 euphoria-stage-1@a3296e8 前的父提交为准） |
+|---|---|---|
+| A. skins-equip 成功路径未写透 24h 缓存 | **不成立** | identity-service.ts L507-510：uploadSkin 成功路径**已**调用 `this.skinService.putCache(account.uuid, skinData, skinModel)`，skinData 即所装备库文件字节（skinPath = skins-library/<id>.png）。唯一缺口：`account.uuid` 缺失时跳过 putCache（L508 三元守卫）——已由新增显式写透补上 |
+| B. 无"皮肤已变更"事件广播 | **成立** | 修复前 `grep skin-changed src/main/index.ts` = 0 命中；notifyAuthChanged（L272）只广播 auth 数据 |
+| C. keep-alive 导航内存停留 | **成立（主因）** | fx/PlayerIdentity.tsx L29-49：`useEffect(…, [])` 空依赖——getSkin 仅挂载时取一次并存入组件 state；Play 视图为 keep-alive（SkinViewerCanvas L196-200 注释明确 display:none 切换不卸载），故 equip 后 hero 内存中的 dataUrl 永不更新 |
+
+## 修法（三处）
+
+1. **写透补强**（index.ts skins-equip 成功路径）：`new SkinService().putCache(uuid, bytes, model)` 显式写透库文件字节——覆盖 uploadSkin 的 uuid 缺失缺口，字节与 uploadSkin 内部写透完全一致，零网络。判定走纯函数 `shouldWriteThroughCache(uuid)`（uuid 非空才写）。
+2. **广播**：`notifySkinChanged(accountId, model)`（复用 notifyAuthChanged 事件模式）→ `skin-changed` 载荷由纯函数 `buildSkinChangedPayload` 组装；preload 暴露 `onSkinChanged` / `removeSkinChangedListeners`。
+3. **消费端**：PlayView 订阅 `skin-changed` → `playerSkinEpoch++` → `<PlayerIdentity key={epoch}>` 重挂载 → getSkin 重取（命中写透缓存，瞬时零网络）。fx/ 零改动（PlayerIdentity 未动，靠父级 key）。legacy 路径（get-skin L627 → resolvePlayerIdentity → 同一 uuid 缓存）天然一致。
+
+纯逻辑测试：tests/skin-sync.test.ts（5 用例：写透判定 uuid 三态、载荷字段/注入时钟/ISO 往返）。
+
+---
+
+# Stage 1 补遗 — equip 仪式按钮（用户验收："equip 按钮太怂"）
+
+commit：`e0faaa6`（feat(identity): equip as a ceremony — solid amber button with four-state interaction）
+
+| 规格 | 落地情况 |
+|---|---|
+| amber 实心按钮 | ✓ `bg-ember` + 深色文字 `text-[var(--ground)]` + `px-[28px] py-[10px]` + `rounded-full`（既有圆角）+ `text-[15px] font-semibold lowercase`（贴 hero 名字字号） |
+| 全屏唯一 amber 块面 | ✓ active 下划线是 amber 线条（scaleX），equip 是 amber 块面——层级分明不冲突 |
+| hover | ✓ `-translate-y-0.5`（2px 升）+ `brightness-105`（+5%）；视线偏移**零代码达成**：SkinViewerCanvas 的窗口级 gaze 本就跟随光标，光标移到按钮即注视按钮，移开即回正（公共行为，无 NEEDS DECISION） |
+| 按下 | ✓ `active:scale-[0.97] active:brightness-90` + `duration-micro`（120ms） |
+| in-flight | ✓ 文字 "wearing it now."、`disabled`、脉动 `@keyframes equip-pulse`（0.95↔1.0，800ms，组件内 <style>，未动设计系统文件） |
+| 成功链 | ✓ 300ms 溶解（`opacity-0` + duration-scene）→ `setPreviewId(null)` + hero key 重挂载（onShown GREETING）→ 货架 amber 下划线 scaleX 落位 |
+| 失败 | ✓ 按钮复原 + 下方一行 "couldn't reach mojang. nothing changed." + 200ms 红闪（`border-danger bg-danger/20`） |
+| 状态感知 | ✓ 佩戴中：无按钮 + "wearing it" 小写细字；离线：disabled + "requires microsoft" 小字；缺失文件：equip 不可用 + 说明 |
+| 纯逻辑 | ✓ `equipButtonKind` 六态机器（wearing/idle/busy/dissolving/disabled-offline/missing），tests/equip-button.test.ts 6 用例 |
+
+## NEEDS DECISION
+
+- 无新增。spec 中 "GAZE 层视线朝按钮偏移" 未改任何代码——既有窗口级 gaze 跟随光标的行为天然覆盖（hover 即注视、移开即回正）；若后续想要"hover 时锁定注视点（无视光标）"的更强效果，需要 fx/ 公共接口扩展（`setGazeTarget(rect)`），届时再标 NEEDS DECISION。

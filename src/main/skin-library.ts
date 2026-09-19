@@ -215,6 +215,33 @@ export function normalizeRegistry(value: unknown): SkinRegistry {
   return { schemaVersion: 1, skins: [] };
 }
 
+// ── equip → all-views sync (Stage 1 fix) ───────────────────────────────────
+
+/**
+ * Write-through decision: the 24h skin cache is keyed by account UUID, so a
+ * write-through is only possible (and only meaningful) when the account has
+ * one. Empty/missing uuid → nothing to write; the broadcast is skipped with
+ * it, because no view could resolve a skin for that account anyway.
+ */
+export function shouldWriteThroughCache(uuid: string | null | undefined): boolean {
+  return typeof uuid === 'string' && uuid.length > 0;
+}
+
+export interface SkinChangedPayload {
+  accountId: string;
+  model: 'classic' | 'slim';
+  changedAt: string;
+}
+
+/** Event payload for the 'skin-changed' broadcast (injectable clock for tests). */
+export function buildSkinChangedPayload(
+  accountId: string,
+  model: 'classic' | 'slim',
+  now: number = Date.now(),
+): SkinChangedPayload {
+  return { accountId, model, changedAt: new Date(now).toISOString() };
+}
+
 // ── the library itself ──────────────────────────────────────────────────────
 
 export type ImportResult =
