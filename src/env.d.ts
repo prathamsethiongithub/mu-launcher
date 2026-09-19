@@ -99,9 +99,9 @@ interface ElectronAPI {
       error?: string;
     }>;
 
-  /** Create a new personal world. */
+  /** Create a new personal world. modpackNotice carries honest partial-failure details for .mrpack imports. */
   createWorld: (spec: { name: string; version: string; loader: string; loaderVersion?: string; ramAllocation?: number; settingsPath?: string; modpackPath?: string }) =>
-    Promise<{ success: boolean; world?: World; error?: string }>;
+    Promise<{ success: boolean; world?: World; error?: string; modpackNotice?: string }>;
 
   /** Returns all worlds from the registry. */
   getWorlds: () => Promise<World[]>;

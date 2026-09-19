@@ -1,19 +1,30 @@
 /**
- * Modpack installer — overrides extraction for Modrinth modpacks (.mrpack).
+ * Modpack installer — overrides extraction + declarative file downloads for
+ * Modrinth modpacks (.mrpack).
  *
  * STANDALONE module (phase 1.5 of drag-and-drop modpack import): the parse
  * step lives in the `parse-modpack` IPC handler (main/index.ts) and only
  * identifies the pack; this module performs the actual filesystem side of an
  * install — unpacking the archive's `overrides/` folder into a world's game
- * root so the user's configs and packs land where MCLC reads them.
+ * root, and downloading every entry of modrinth.index.json's `files[]`
+ * (the pack's declarative download manifest) into the same root. Skipping
+ * files[] would install configs whose mods never arrive — a silently
+ * half-installed pack.
  *
- * Contract:
+ * Contracts:
  *   zip entry `overrides/config/sodium.json`  →  `{worldRootPath}/config/sodium.json`
  *   zip entry `overrides/` (the root itself)  →  skipped
+ *   files[i] (env.client != "unsupported")   →  `{worldRootPath}/{files[i].path}`
+ *                                                downloaded from the first
+ *                                                reachable URL in downloads[],
+ *                                                hash-verified (sha1/sha512)
  *
- * Everything is best-effort EXPLICIT: failures throw with the entry name and
- * target path in the message, so the caller can surface a real error instead
- * of a silently half-installed modpack.
+ * Overrides extraction is best-effort EXPLICIT: failures throw with the entry
+ * name and target path in the message. The files[] download loop never
+ * throws: each item reports success/failure individually and the aggregate
+ * `{ installed, skipped, failed }` lets the caller decide how loudly to
+ * complain — a single dead CDN must not lose the other 200 already-verified
+ * mods.
  *
  * adm-zip notes (both matter here):
  *   - The archive is read into a Buffer FIRST and handed to the constructor:
@@ -24,8 +35,72 @@
  *     adm-zip's own constructor accepts `string | Buffer` (adm-zip.js:51).
  */
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { createWriteStream } from 'node:fs';
+import { dirname, isAbsolute, join } from 'node:path';
+import { downloadGuard, readWithStallGuard } from './net';
+
+/** Modrinth asks clients to identify themselves; bare/absent UAs get throttled. */
+const USER_AGENT = 'mu-master-launcher/1.0.0 (github.com/prathamsethiongithub/mu-launcher)';
+
+/**
+ * One entry of modrinth.index.json's `files[]`. Only the fields the download
+ * loop actually consumes are typed; extra Modrinth fields are ignored.
+ */
+interface MrpackFile {
+  path: string;
+  /** URL candidates — tried in order, first success wins. */
+  downloads?: string[];
+  /** File size in bytes; mismatching payloads are rejected. */
+  fileSize?: number;
+  /** Hash family + lowercase hex digest — the integrity contract. */
+  hashes?: { sha1?: string; sha512?: string };
+  /** Client/server/env applicability; client == "unsupported" skips the item. */
+  env?: { client?: string; server?: string };
+}
+
+interface MrpackIndex {
+  files?: MrpackFile[];
+}
+
+/**
+ * Read modrinth.index.json out of an archive buffer.
+ * Throws with [E701] on an unreadable archive or a malformed/unparseable
+ * index — a corrupt manifest must surface, never silently install nothing.
+ */
+async function readModpackIndex(archive: Buffer): Promise<MrpackIndex> {
+  const AdmZipCtor = (await import('adm-zip')).default as unknown as new (
+    data: Buffer,
+  ) => { getEntries(): ZipEntry[] };
+  let indexText: string;
+  try {
+    const zip = new AdmZipCtor(archive);
+    const entry = zip
+      .getEntries()
+      .find((e) => e.entryName === 'modrinth.index.json' && !e.isDirectory);
+    if (!entry) {
+      throw new Error(
+        '[E701] The modpack archive has no modrinth.index.json — not a Modrinth modpack.',
+      );
+    }
+    indexText = entry.getData().toString('utf8');
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('[E701]')) throw err;
+    throw new Error(
+      `[E701] Could not read modrinth.index.json from the modpack archive: ${
+        (err as Error).message
+      }`,
+    );
+  }
+  try {
+    return JSON.parse(indexText) as MrpackIndex;
+  } catch (err) {
+    throw new Error(
+      `[E701] modrinth.index.json is not valid JSON: ${(err as Error).message}`,
+    );
+  }
+}
 
 const OVERRIDES_PREFIX = 'overrides/';
 
@@ -124,4 +199,178 @@ export async function installModpackOverrides(
       );
     }
   }
+}
+
+/**
+ * Validate a files[] item's declared path: relative, inside the world root,
+ * no traversal (..), no absolute paths or drive letters. Mirrors the
+ * zip-slip guard above — a crafted manifest must never write outside the
+ * launcher's data directory.
+ */
+function assertSafePackPath(relPath: string): void {
+  if (!relPath || typeof relPath !== 'string') {
+    throw new Error('[E702] A files[] entry is missing its "path" field.');
+  }
+  if (isAbsolute(relPath) || /^[a-zA-Z]:[\\/]/.test(relPath)) {
+    throw new Error(`[E702] Refusing absolute path from modpack manifest: "${relPath}".`);
+  }
+  if (relPath.includes('..')) {
+    throw new Error(`[E702] Refusing unsafe path from modpack manifest: "${relPath}".`);
+  }
+}
+
+/**
+ * Download ONE files[] item: pick the first reachable URL from downloads[],
+ * stream to a .tmp sibling (bounded by net.ts guard primitives), verify the
+ * declared sha1/sha512 hash, then atomically rename into place. Any failure
+ * removes the temp file and rethrows — a hash mismatch NEVER leaves a wrong
+ * file silently in place.
+ */
+async function downloadPackFile(item: MrpackFile, worldRootPath: string): Promise<void> {
+  assertSafePackPath(item.path);
+
+  const urls = (item.downloads || []).filter((u) => typeof u === 'string' && u.length > 0);
+  if (urls.length === 0) {
+    throw new Error(
+      `[E703] "${item.path}" lists no download URL in the modpack manifest.`,
+    );
+  }
+
+  const hashFormat = item.hashes?.sha512 ? 'sha512' : 'sha1';
+  const expectedHash = item.hashes?.sha512 || item.hashes?.sha1;
+
+  const dest = join(worldRootPath, ...item.path.replace(/\\/g, '/').split('/').filter(Boolean));
+  const tmp = `${dest}.tmp`;
+
+  let lastErr: Error | null = null;
+  for (const url of urls) {
+    try {
+      // Same guard pattern as mod-installer's downloadWithHash: a connect
+      // timeout for the headers, a per-chunk stall guard for the body.
+      const guard = downloadGuard();
+      const response = await fetch(url, {
+        signal: guard.controller.signal,
+        headers: { 'User-Agent': USER_AGENT },
+      });
+      guard.headersReceived();
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} from ${url}`);
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('No response body');
+
+      const writer = createWriteStream(tmp);
+      const hash = createHash(hashFormat);
+      try {
+        while (true) {
+          const { done, value } = await readWithStallGuard(reader.read(), guard.controller);
+          if (done) break;
+          writer.write(value);
+          hash.update(value);
+        }
+        writer.end();
+        await new Promise<void>((resolve, reject) => {
+          writer.on('finish', resolve);
+          writer.on('error', reject);
+        });
+      } catch (err) {
+        // Bounded read guards and write errors all funnel here.
+        writer.destroy();
+        await rm(tmp, { force: true }).catch(() => {});
+        throw err;
+      }
+
+      // Integrity gates BEFORE the atomic rename — a wrong payload never
+      // lands at the destination path.
+      if (item.fileSize !== undefined) {
+        const actualSize = (await stat(tmp)).size;
+        if (actualSize !== item.fileSize) {
+          await rm(tmp, { force: true }).catch(() => {});
+          throw new Error(
+            `[E704] "${item.path}" failed integrity check: expected ${item.fileSize} bytes, got ${actualSize}.`,
+          );
+        }
+      }
+      const actualHash = hash.digest('hex');
+      if (expectedHash && actualHash.toLowerCase() !== expectedHash.toLowerCase()) {
+        await rm(tmp, { force: true }).catch(() => {});
+        throw new Error(
+          `[E704] "${item.path}" failed integrity check: expected ${expectedHash}, got ${actualHash}. The file was deleted.`,
+        );
+      }
+
+      // Atomically move the verified temp file into place. An existing file
+      // at dest (e.g. a re-import) is replaced; on Windows rename fails if
+      // dest exists, so remove it first — same sequence as mod-installer.
+      await rm(dest, { force: true }).catch(() => {});
+      try {
+        await rename(tmp, dest);
+      } catch (err) {
+        await rm(tmp, { force: true }).catch(() => {});
+        throw err;
+      }
+      return;
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err));
+      // Clean any partial temp file before trying the next URL candidate.
+      await rm(tmp, { force: true }).catch(() => {});
+    }
+  }
+  throw new Error(
+    `[E703] Failed to download "${item.path}" from all ${urls.length} URL(s). ` +
+      `Last error: ${lastErr?.message || 'unknown'}`,
+  );
+}
+
+/**
+ * Download every entry of modrinth.index.json's `files[]` into the world
+ * root. Items with env.client === "unsupported" are skipped (client-irrelevant
+ * files such as server-side-only jars). All remaining items download
+ * sequentially; each is hash-verified before its atomic rename.
+ *
+ * Never throws. Returns the aggregate so the caller can surface an honest
+ * partial-success message instead of pretending the pack is complete.
+ */
+export async function installModpackFiles(
+  zipPath: string,
+  worldRootPath: string,
+): Promise<{ installed: number; skipped: number; failed: number; errors: string[] }> {
+  let archive: Buffer;
+  try {
+    archive = await readFile(zipPath);
+  } catch (err) {
+    throw new Error(
+      `[E701] Could not read modpack archive at ${zipPath}: ${(err as Error).message}`,
+    );
+  }
+  const index = await readModpackIndex(archive);
+  const items = Array.isArray(index.files) ? index.files : [];
+
+  let installed = 0;
+  let skipped = 0;
+  let failed = 0;
+  const errors: string[] = [];
+
+  for (const item of items) {
+    if (item?.env?.client === 'unsupported') {
+      skipped++;
+      continue;
+    }
+    if (!item || typeof item.path !== 'string') {
+      failed++;
+      errors.push('[E702] A files[] entry is missing its "path" field.');
+      continue;
+    }
+    try {
+      await mkdir(dirname(join(worldRootPath, ...item.path.replace(/\\/g, '/').split('/').filter(Boolean))), { recursive: true });
+      await downloadPackFile(item, worldRootPath);
+      installed++;
+    } catch (err) {
+      failed++;
+      errors.push((err as Error).message);
+      console.error('[modpack] files[] item failed:', (err as Error).message);
+    }
+  }
+
+  return { installed, skipped, failed, errors };
 }

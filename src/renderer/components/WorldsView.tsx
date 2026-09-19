@@ -699,6 +699,12 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
                 if (result.success) {
                   setPendingModpack(null);
                   onWorldsChanged();
+                  // Honest partial-failure reporting: a .mrpack whose files[]
+                  // could not all download still lands, but the user must
+                  // know — silence would repeat the old half-installed lie.
+                  if (result.modpackNotice) {
+                    setError(result.modpackNotice);
+                  }
                 } else {
                   setError(result.error || 'Failed to create world');
                 }

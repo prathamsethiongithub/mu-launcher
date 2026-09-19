@@ -183,7 +183,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       error?: string;
     }>,
   createWorld: (spec: { name: string; version: string; loader: string; loaderVersion?: string; ramAllocation?: number; settingsPath?: string; modpackPath?: string }) =>
-    ipcRenderer.invoke('create-world', spec),
+    ipcRenderer.invoke('create-world', spec) as Promise<{ success: boolean; world?: unknown; error?: string; modpackNotice?: string }>,
 
   /** Returns all worlds from the registry. */
   getWorlds: () => ipcRenderer.invoke('get-worlds'),

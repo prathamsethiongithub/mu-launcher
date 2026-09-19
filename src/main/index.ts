@@ -12,7 +12,7 @@ import { runPreflightCheck } from './preflight-check';
 import { SkinService } from './skin-service';
 import { WorldManager } from './world-manager';
 import { listMods, toggleMod, deleteMod, addMod } from './mod-manager';
-import { installModpackOverrides } from './modpack-installer';
+import { installModpackOverrides, installModpackFiles } from './modpack-installer';
 import { pingMinecraftServer } from './server-pinger';
 import { initTray, disposeTray } from './tray-manager';
 import { diagnoseLastCrash } from './crash-diagnostic';
@@ -898,17 +898,38 @@ function registerIpcHandlers(): void {
     if (!world) {
       return { success: false, error: 'Failed to create world — filesystem error.' };
     }
-    // Modpack import: unpack the archive's overrides/ into the new world root.
-    // Extraction failure must NOT undo the world — log and let creation stand.
+    // Modpack import: unpack the archive's overrides/ into the new world root
+    // AND download its declarative files[] manifest (the actual mods). A
+    // failure must NOT undo the world — the creation stands and failures are
+    // reported honestly in the response instead of pretending the pack is
+    // complete when only configs arrived.
+    let modpackNotice: string | undefined;
     if (spec.modpackPath && world) {
+      const root = worldManager.resolveRoot(world);
       try {
-        const root = worldManager.resolveRoot(world);
         await installModpackOverrides(spec.modpackPath, root);
       } catch (err) {
         console.error('Modpack overrides extraction failed:', err);
+        modpackNotice = `Modpack overrides could not be installed: ${(err as Error).message}`;
+      }
+      try {
+        const files = await installModpackFiles(spec.modpackPath, root);
+        console.log(
+          `[modpack] files[]: ${files.installed} installed, ${files.skipped} skipped, ${files.failed} failed`,
+        );
+        if (files.failed > 0) {
+          modpackNotice =
+            `Modpack installed with ${files.failed} failed file(s) ` +
+            `(${files.installed} ok, ${files.skipped} skipped). First error: ${files.errors[0]}`;
+        }
+      } catch (err) {
+        // E701 — unreadable archive/corrupt manifest. Distinct from per-file
+        // failures: the manifest itself could not be processed.
+        console.error('Modpack files[] download failed:', err);
+        modpackNotice = `Modpack files could not be installed: ${(err as Error).message}`;
       }
     }
-    return { success: true, world };
+    return { success: true, world, modpackNotice };
   });
 
   // ── World Management IPC ─────────────────────────────────────────────
