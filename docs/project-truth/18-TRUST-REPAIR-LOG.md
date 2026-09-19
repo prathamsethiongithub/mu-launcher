@@ -59,3 +59,25 @@
 
 - `nul` 文件（仓库根，Windows 保留名）无法被 git 追踪（`git add` exit 128），留在未跟踪状态；对构建无影响，建议人工删除（文件系统 API 才能删）。
 - 无 未确认 / 受阻 / 需决策 项：六项指控全部在源码中验证属实并修复。
+
+## 5. 后续修复（分支 oracle-fixes，已 fast-forward 合入 master，2026-09-19）
+
+### 5.1 Oracle 把 JDK 栈帧误归因为模组 "Lang"
+
+- **根因**：`detectModName` 的包遍历循环 `for (let depth = 2; …)` 从 2 段起，`NON_MOD_PACKAGES` 中的单段根（`java`/`sun`/`jdk`/`javax`）从不被检查。`java.lang.Thread.run` 走到 parts 末尾都未命中白名单，第二段 `lang` 被 `parts[1]` 兑底逻辑当成模组名。
+- **修法（commit `4cadf4a`）**：循环起点改为 `depth = 1`，单段根命中白名单即 break。生产代码仅此一处改动；Sodium 归因、vanilla 帧返回 undefined、mixin 优先、jar 归因等既有行为全部保持绿色。
+- **测试**：疑似 bug 用例改为断言 `detectModName(纯 JDK 栈帧) === undefined`；新增 `sun.nio.*`/`jdk.internal.*`/`javax.crypto.*` 三个防御用例（修复天然覆盖，未额外改生产代码）。crash-diagnostic.test.ts 20 → 21 用例。
+
+### 5.2 版本比较把 prerelease 当作更新
+
+- **根因**：`isNewerVersion` 的非数字段字符串回退中 `'beta' > ''`（缺失段零填充为空串），故 `isNewerVersion('1.2.3-beta', '1.2.3') === true`——稳定安装可能被 Modrinth 上的 prerelease 触发升级。
+- **修法（commit `b4743ad`）**：数字段照旧先比；当数字核全等（`comparable === true`）且 `latest` 在 `current` 结束处多出一个非数字标签时，若 `latest` 带 prerelease 标签（`hasPrereleaseTag`：首个 `+` 之前含 `-`）则判旧（返回 false）；`+` 构建元数据保留原字符串回退行为（`1.2.3+build.1` > `1.2.3` 不变）。实现最小：约 12 行判定 + 4 行辅助函数。
+- **测试**：疑似 bug 用例改为 `isNewerVersion('1.2.3-beta', '1.2.3') === false`，新增 `isNewerVersion('1.2.4-beta', '1.2.3') === true`（更高数字段仍是新）。version.test.ts 9 → 10 用例。
+- **调用方检查**：`isNewerVersion` 生产代码唯一调用点为 `update-checker.ts` 的 `checkForUpdates`（check-mod-updates 流程，src/main/index.ts 引入）；无任何调用方依赖旧行为，修复使更新流程更安全。
+
+### 5.3 绿灯
+
+- 每次提交前：`npm run typecheck`（tsc --noEmit，0 错误）+ `npm run build`（electron-vite，✓ built）。
+- 最终：`npm test` → **Test Files 5 passed (5)，Tests 60 passed (60)**（58 → 60）。
+- 先红后绿如实执行：任务 2 修前 vitest 红灯 1 failed（钉住用例），修复后转绿；任务 1 由上一会话完成，其 commit `4cadf4a` 同样遵循测试先行。
+- 本小节无 未确认 / 受阻 / 需决策 项。
