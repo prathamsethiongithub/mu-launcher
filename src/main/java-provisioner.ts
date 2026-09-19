@@ -463,18 +463,6 @@ export class JavaProvisioner extends EventEmitter {
     }
   }
 
-  /**
-   * Extract a ZIP archive to the destination directory using adm-zip.
-   * Used by the orchestrator when the JRE is delivered as a zip.
-   */
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private async extractZip(zipPath: string, destDir: string): Promise<void> {
-    // Dynamic import so adm-zip is only loaded when needed
-    const AdmZip = (await import('adm-zip')).default;
-    const zip = new AdmZip(zipPath);
-    zip.extractAllTo(destDir, true);
-  }
-
   /** Return the cached Java path, or null if not yet provisioned. */
   getJavaPath(): string | null {
     return this.currentJavaPath;
