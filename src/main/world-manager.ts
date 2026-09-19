@@ -68,7 +68,6 @@ const MANAGED_WORLD_CONFIG = {
 export class WorldManager {
   private registry: WorldRegistry;
   private registryPath: string;
-  private writeLock: boolean = false;
 
   constructor() {
     this.registryPath = join(app.getPath('userData'), REGISTRY_FILENAME);
@@ -720,28 +719,22 @@ export class WorldManager {
     return join(base, relative);
   }
 
-  // ── Registry Persistence (atomic + serialized) ───────────────────────
+  // ── Registry Persistence (atomic) ────────────────────────────────
 
   private save(): void {
-    // Serialize writes — if a write is in progress, wait and retry.
-    while (this.writeLock) {
-      // Spin-wait is safe here: writes are synchronous and fast (<1ms).
-      // The lock prevents IPC race conditions where two handlers mutate
-      // the registry concurrently.
-    }
-    this.writeLock = true;
+    // No lock is needed: JS runs this single-threaded and the write below is
+    // synchronous, so two saves can never interleave. (The old spin-wait on
+    // `this.writeLock` was decorative — a synchronous body can never observe
+    // its own lock held.) Writes stay atomic via tmp+rename; a crash mid-write
+    // leaves the .tmp orphaned but the real registry intact.
     try {
       const json = JSON.stringify(this.registry, null, 2);
       const tmpPath = this.registryPath + '.tmp';
 
-      // Atomic write: write to tmp, then rename. A crash mid-write
-      // leaves the .tmp file orphaned but the real registry intact.
       writeFileSync(tmpPath, json, 'utf-8');
       renameSync(tmpPath, this.registryPath);
     } catch (err) {
       console.error('[worlds] Failed to save registry:', err);
-    } finally {
-      this.writeLock = false;
     }
   }
 
