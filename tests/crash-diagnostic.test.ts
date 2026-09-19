@@ -3,10 +3,11 @@ import { detectModName, detectReason, prettifyModId } from '../src/main/crash-di
 
 /**
  * Test 2 — "The Oracle" attribution (crash-diagnostic.ts), synthetic logs.
- * All assertions encode the CURRENT implementation behaviour. One case is
- * annotated 现状如此，疑似 bug: JDK frames whose 1-segment root ('java',
- * 'sun', 'jdk'…) is whitelisted are still misattributed because the
- * package-walk loop starts at depth 2 and never tests the 1-segment prefix.
+ * All assertions encode the CURRENT implementation behaviour. The JDK-frame
+ * cases assert the repaired semantics (oracle-fixes; was 现状如此，疑似 bug:
+ * the package-walk loop used to start at depth 2, so whitelisted
+ * single-segment roots like 'java' were never checked and java.lang.*
+ * frames surfaced a bogus mod named "Lang").
  *
  * diagnoseLastCrash is intentionally NOT covered here: it is fs-bound
  * (readdir/stat/read over crash-reports/) and outside the prescribed

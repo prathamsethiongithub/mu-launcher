@@ -4,8 +4,8 @@ import { isNewerVersion } from '../src/main/update-checker';
 /**
  * Test 1 — version comparison (update-checker.ts isNewerVersion).
  * Assertions encode the CURRENT implementation behaviour, including its
- * documented fallback paths. One case is annotated 现状如此，疑似 bug because
- * the real behaviour treats a prerelease as strictly newer than the release.
+ * documented fallback paths. The prerelease cases assert semver-correct
+ * semantics (repaired in oracle-fixes; was 现状如此，疑似 bug).
  */
 describe('isNewerVersion', () => {
   it('equal versions are not newer', () => {
@@ -37,13 +37,16 @@ describe('isNewerVersion', () => {
     expect(isNewerVersion('1.2.3', '1.2.3-beta')).toBe(false);
   });
 
-  it('现状如此，疑似 bug: prerelease counts as newer than the release', () => {
-    // 'beta' vs '' (zero-padded missing segment) in the non-numeric
-    // fallback: 'beta' > '' is true, so a -beta suffix makes a version
-    // "newer" — a stable install would be updated onto a prerelease.
-    // Recorded in docs/project-truth/18-TRUST-REPAIR-LOG.md; production
-    // code intentionally untouched per the task brief.
-    expect(isNewerVersion('1.2.3-beta', '1.2.3')).toBe(true);
+  it('prerelease is not newer than the release at an equal numeric core', () => {
+    // Fixed regression guard (was 现状如此，疑似 bug): the non-numeric string
+    // fallback ranked 'beta' above the zero-padded missing segment (''),
+    // so a -beta suffix read as "newer" and a stable install could be
+    // updated onto a prerelease.
+    expect(isNewerVersion('1.2.3-beta', '1.2.3')).toBe(false);
+  });
+
+  it('a higher numeric core still wins over a prerelease (1.2.4-beta > 1.2.3)', () => {
+    expect(isNewerVersion('1.2.4-beta', '1.2.3')).toBe(true);
   });
 
   it('build metadata counts as newer (string fallback)', () => {

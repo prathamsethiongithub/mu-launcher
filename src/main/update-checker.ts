@@ -53,6 +53,11 @@ function assertSafeJarFilename(name: string): void {
  * `current`. Unparseable segments fall back to string inequality for that
  * position; wholly unparseable pairs fall back to plain inequality (spec
  * behaviour) so exotic version schemes still surface as updates.
+ *
+ * Prerelease semantics: numeric segments compare first; when the numeric
+ * core is equal, a prerelease tag (-beta/-rc/…) on `latest` marks it OLDER
+ * than the bare release — a stable install is never updated onto a
+ * prerelease. Build metadata ('+' section) keeps the string fallback path.
  */
 export function isNewerVersion(latest: string, current: string): boolean {
   if (latest === current) return false;
@@ -67,7 +72,16 @@ export function isNewerVersion(latest: string, current: string): boolean {
       // Non-numeric segment: fall back to string compare for this position.
       const ls = l[i] ?? '';
       const cs = c[i] ?? '';
-      if (ls !== cs) return ls > cs;
+      if (ls !== cs) {
+        // `comparable` is true only when the numeric core fully matched (any
+        // numeric difference returned earlier). If `current` ends here while
+        // `latest` carries an extra tag, that tag came from a '-' separator
+        // when it is a prerelease — and a prerelease is OLDER than the bare
+        // release, never newer. Build metadata has no '-', so it keeps the
+        // string fallback below ('build' > '' still reads as an update).
+        if (comparable && cs === '' && hasPrereleaseTag(latest)) return false;
+        return ls > cs;
+      }
       continue;
     }
     comparable = true;
@@ -77,6 +91,13 @@ export function isNewerVersion(latest: string, current: string): boolean {
   // as an update only when nothing numeric contradicted, per Modrinth listing
   // order (the API returns newest first).
   return comparable ? false : latest !== current;
+}
+
+/** True when the version carries a prerelease tag: a '-' in the part before
+ *  any build metadata ('+' section). "1.2.3-beta" → true, "1.2.3+build.1"
+ *  → false. */
+function hasPrereleaseTag(version: string): boolean {
+  return version.split('+')[0].includes('-');
 }
 
 /** One mod's metadata from its jar, or null when it isn't a Fabric mod. */
