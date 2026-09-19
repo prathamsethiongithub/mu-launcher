@@ -25,6 +25,7 @@ import type {
   WorldMod,
   WorldResourcePack,
 } from '../shared/types';
+import { SMP_SERVER_HOST, SMP_SERVER_PORT } from '../shared/constants';
 
 /**
  * WorldManager — singleton that owns the world registry.
@@ -35,7 +36,7 @@ import type {
  * Write rules:
  *  - Every mutation calls save() immediately (no batch writes).
  *  - All writes are atomic: tmp file + rename.
- *  - Writes are serialized via a write lock to prevent concurrent IPC races.
+ *  - No locking is required: saves are synchronous on a single thread.
  *
  * Data ownership:
  *  - Managed world mods → mod-data.ts (code-owned, not stored in registry)
@@ -59,8 +60,8 @@ const MANAGED_WORLD_CONFIG = {
   rootPath: '{userData}/minecraft',
   ramAllocation: 4096,
   assignedServer: {
-    ip: 'prathamsethi.minekeep.gg',
-    port: 25565,
+    ip: SMP_SERVER_HOST,
+    port: SMP_SERVER_PORT,
     label: "Masters' Union SMP",
   } as WorldServer,
 };

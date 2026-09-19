@@ -3,14 +3,15 @@ import * as path from 'path';
 import * as zlib from 'zlib';
 import { app } from 'electron';
 import * as nbt from 'prismarine-nbt';
+import { SMP_SERVER_HOST, SMP_SERVER_PORT } from '../shared/constants';
 
 export type ServerInjectorStepCallback = (step: string, status: string) => void;
 
 export class ServerInjector {
   private mcDataDir: string;
   private serverName: string = "Masters' Union SMP";
-  private serverIp: string = 'prathamsethi.minekeep.gg';
-  private serverPort: number = 25565;
+  private serverIp: string = SMP_SERVER_HOST;
+  private serverPort: number = SMP_SERVER_PORT;
   private _onStep: ServerInjectorStepCallback | null = null;
 
   constructor(mcDataDir?: string) {

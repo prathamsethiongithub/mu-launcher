@@ -17,9 +17,10 @@
 
 import { app, BrowserWindow, Menu, nativeImage, Notification, Tray } from 'electron';
 import { pingMinecraftServer, type ServerStatus } from './server-pinger';
+import { SMP_SERVER_HOST, SMP_SERVER_PORT } from '../shared/constants';
 
-const MONITORED_HOST = 'prathamsethi.minekeep.gg';
-const MONITORED_PORT = 25565;
+const MONITORED_HOST = SMP_SERVER_HOST;
+const MONITORED_PORT = SMP_SERVER_PORT;
 const PING_INTERVAL_MS = 60_000;
 
 let tray: Tray | null = null;

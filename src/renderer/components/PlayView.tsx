@@ -11,6 +11,7 @@ import MagicRings from './fx/MagicRings';
 // sit behind the character, it drew a hard cut at the canvas top edge, and by
 // owning the band above the stage it capped how large the hero could be. The
 // component is kept in the repo (fx/WorldBeacon.tsx) but no longer mounted.
+import { SMP_SERVER_HOST, SMP_SERVER_PORT } from '../../shared/constants';
 
 // SideRays (React Bits, ogl — vendor-pristine, locked owner config) is the
 // approved ambient light field for this composition: an amber directional
@@ -57,7 +58,7 @@ const STAGES = [
   { id: 'mc',   label: 'Launching',      real: ['launching', 'running'] },
 ] as const;
 
-const SERVER_HOST = 'prathamsethi.minekeep.gg';
+const SERVER_HOST = SMP_SERVER_HOST;
 
 /**
  * The hero composition's two independent heights (see the HERO LAYER comment
@@ -159,7 +160,7 @@ const PlayView: React.FC<PlayViewProps> = ({
     const fetchStatus = async () => {
       try {
         const host = activeWorld?.assignedServer?.ip || SERVER_HOST;
-        const port = activeWorld?.assignedServer?.port || 25565;
+        const port = activeWorld?.assignedServer?.port || SMP_SERVER_PORT;
         const status = await window.electronAPI.pingServer(host, port);
         setServerStatus(status);
       } catch { setServerStatus({ online: false }); }
