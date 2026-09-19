@@ -143,3 +143,62 @@ commit：`e0faaa6`（feat(identity): equip as a ceremony — solid amber button 
 ## NEEDS DECISION
 
 - 无新增。spec 中 "GAZE 层视线朝按钮偏移" 未改任何代码——既有窗口级 gaze 跟随光标的行为天然覆盖（hover 即注视、移开即回正）；若后续想要"hover 时锁定注视点（无视光标）"的更强效果，需要 fx/ 公共接口扩展（`setGazeTarget(rect)`），届时再标 NEEDS DECISION。
+
+# Stage 1 补遗 — 像素显形（Pixel Materialization）
+
+commits：`07e4f8f`（test(pixel): pin curtain timing, scatter, and ceremony machine）→ `5dd1181`（feat(pixel): pixel curtain for equip morph and import reveal）
+
+皮肤的 64×64 贴图像素本身就是显形素材——不是通用粒子，是"从贴图到生命"的叙事。两个场景共用一套覆盖层组件（`PixelCurtain`），素材与种子全部来自库内已有数据。
+
+## 结果表
+
+| 场景 | 状态 | commit | 测试数 |
+|---|---|---|---|
+| 纯逻辑（时序/网格/散布/skip/sweep/时序机/按钮映射） | ✓ | `07e4f8f` | 58 |
+| equip 变形（按钮溶解 ∥ 幕组装 → hold 换肤 → 扫溶） | ✓ | `5dd1181` | （组件+接线，状态转移由既有用例+纯函数用例钉住） |
+| 导入显形（飞入 → 归位 → 收束 → 揭示，双路径统一） | ✓ | `5dd1181` | （同上） |
+
+## 时序编排（文字图）
+
+```
+A. equip 变形（预算 700ms 硬上限，可中断）
+   0ms         400ms      500ms      700ms
+   │— assemble —│— hold —│— dissolve —│
+   按钮"wearing it now."（busy）→ EQUIP_SUCCESS 即 materializing → 按钮溶解（opacity-0，与组装并行）
+   幕：打乱态皮肤像素逐格浮现（seeded shuffle，同 seed 同结果）
+   hold 起点 = 换肤窗口：previewId→null + mirrorEpoch++（hero 幕后重挂载，GREETING 波在幕溶解时迎出）
+   dissolve：幕重绘整幅后自顶向下扫过 clearRect（前缀语义，掉帧收敛无缝隙）
+   complete/skip 同终态：卸幕 → 清 ceremony
+
+B. 导入显形（900ms，每个新入库皮肤一次）
+   0ms         350ms      550ms      700ms      900ms
+   │— fly-in —│— settle —│— converge —│— reveal —│
+   四散像素飞入归位（ease-out）→ 定格贴图大图 → 收束（保持整幅）→ 揭示
+   reveal 起点 = 换肤窗口：previewId→新皮肤 id（幕后加载，揭幕即现身）
+   complete/skip 同终态：卸幕 → "saved."（首件则既有 "saved. first of many." 接管）
+```
+
+## 中断规则（跳过）
+
+- 幕布可见期间拦截 hero 区域点击 → **瞬跳终态**：换肤窗口立即执行（幂等，`swappedRef` 守卫）→ 卸幕 → 清态。卸载 canvas 是瞬时的，**无二次动画**；第 20 次 equip 的用户零减速。
+- 连续 equip / 导入途中再触发：新操作先经 `finalizeActiveCurtain` 把旧幕结算到终态再开新幕，**绝不叠加两层**。
+
+## 回退规则
+
+- `prefers-reduced-motion: reduce` → 图片加载完成即跳终态（不进 rAF 循环）。
+- 帧率守卫（D8）：仅采前 200ms 帧间隔，**≥3 样本且中位数 >50ms** → 弃幕直切；样本不足（如卡在组装首帧）→ 无证据不行动。
+- 图片加载失败（`onerror`）→ 立即跳终态（换肤照常发生，只是没有仪式）。
+
+## 数据通道（零新 IPC）
+
+- equip 素材：货架条目自带的 `dataUrl`（skins-list 已供给）；导入素材：`loadSkins`/`refreshWardrobe` 刷新后的列表（D3：两函数改为返回数组，调用方同步）——**新增 IPC 通道：无**。
+- 种子（D7）：皮肤 `hash` 前 8 位十六进制 `parseInt`（`hashSeed`），同皮肤永远同一张幕。
+- 纹理源兜底：条目 `dataUrl === null`（文件缺失）→ 不开幕，走既有的瞬时换肤路径。
+
+## 状态机（D6）
+
+`equip.phase: 'idle' | 'busy' | 'materializing' | 'done' | 'fail'`，转移一律经纯函数 `equipCeremonyNext`（`EQUIP_START` / `EQUIP_SUCCESS` / `SWAP_WINDOW` / `CURTAIN_END` / `EQUIP_FAIL`）；materializing 映射按钮 kind `'dissolving'`（按钮溶解），done 落回 null。失败路径语义零变化（busy → fail → 红闪 + "couldn't reach mojang. nothing changed."）。
+
+## 约束遵守
+
+fx/ 内部零改动（幕是容器级覆盖层，z-20 于 hero 容器内）；零新依赖；零新 CSS 变量（幕底读既有 `--ground`）；equip swell 是唯一音频且不重复触发；全部文案小写（"saved." 与 "wearing it now." 同语感）。
