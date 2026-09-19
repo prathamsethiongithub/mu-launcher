@@ -1,5 +1,19 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import SkinViewerCanvas from './fx/SkinViewerCanvas';
+
+/**
+ * Identity Studio — the player's private skin wardrobe.
+ *
+ * Layering (per the rework brief): account strip (one quiet row) → the hero
+ * (the live character + "same game. different you.") → the skin shelf
+ * (horizontal cards: import / rename / equip / delete / reveal).
+ *
+ * Honesty rules: equip is a network operation and always shows its true state
+ * (in-flight / "wearing it now." / "couldn't reach mojang. nothing changed.");
+ * the "active" mark appears ONLY when the account's worn-skin hash matches a
+ * library entry — never guessed; offline accounts can't wear custom skins and
+ * the UI says why instead of pretending.
+ */
 
 interface AccountData {
   id: string;
@@ -8,46 +22,89 @@ interface AccountData {
   uuid?: string;
   createdAt: string;
   lastUsedAt?: string;
-  /** Enriched by the get-accounts handler: whether a session exists. */
   hasSession?: boolean;
 }
 
-interface PendingSkin {
-  dataUrl: string;
-  width: number;
-  height: number;
+interface SkinEntry {
+  id: string;
+  name: string;
+  fileName: string;
+  model: 'classic' | 'slim';
+  addedAt: string;
+  lastEquippedAt?: string;
+  hash: string;
+  /** data URL of the PNG (null → the file is missing — the "missing" card). */
+  dataUrl: string | null;
 }
 
-/** Map the upload variant (Mojang's language) to skinview3d's model. */
 const toViewerModel = (variant: 'classic' | 'slim'): 'default' | 'slim' =>
   variant === 'slim' ? 'slim' : 'default';
 
+const DRAG_HINT_KEY = 'identity-studio-drag-hint-done';
+
+/** 2D head crop for shelf cards — canvas 2D, never a three.js instance. */
+const SkinHead: React.FC<{ dataUrl: string | null; size?: number }> = ({ dataUrl, size = 56 }) => {
+  const ref = useRef<HTMLCanvasElement>(null);
+  useEffect(() => {
+    const canvas = ref.current;
+    if (!canvas || !dataUrl) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    const img = new Image();
+    img.onload = () => {
+      ctx.imageSmoothingEnabled = false;
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // Face region of the head: (8,8)-(16,16) on both 64×64 and 64×32 layouts.
+      ctx.drawImage(img, 8, 8, 8, 8, 0, 0, canvas.width, canvas.height);
+    };
+    img.src = dataUrl;
+  }, [dataUrl]);
+  if (!dataUrl) {
+    return (
+      <div
+        className="flex items-center justify-center rounded-[4px] border border-line text-[10px] text-faint"
+        style={{ width: size, height: size }}
+      >
+        missing
+      </div>
+    );
+  }
+  return <canvas ref={ref} width={size} height={size} className="rounded-[4px]" style={{ width: size, height: size }} />;
+};
+
 const IdentityView: React.FC = () => {
+  // ── accounts (the quiet strip) ────────────────────────────────────────
   const [accounts, setAccounts] = useState<AccountData[]>([]);
   const [activeAccountId, setActiveAccountId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
-  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [showOfflineDialog, setShowOfflineDialog] = useState(false);
   const [offlineName, setOfflineName] = useState('');
   const [offlineError, setOfflineError] = useState<string | null>(null);
   const [msLoading, setMsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
 
-  // ── Identity Studio state ─────────────────────────────────────────────
-  const [skinDataUrl, setSkinDataUrl] = useState<string | null>(null);
-  const [skinModel, setSkinModel] = useState<'slim' | 'default'>('default');
-  const [skinVariant, setSkinVariant] = useState<'classic' | 'slim'>('classic');
-  const [skinLoading, setSkinLoading] = useState(false);
-  const [pendingSkin, setPendingSkin] = useState<PendingSkin | null>(null);
-  const [pendingVariant, setPendingVariant] = useState<'classic' | 'slim'>('classic');
-  const [uploadLoading, setUploadLoading] = useState(false);
-  const [skinMessage, setSkinMessage] = useState<{ text: string; tone: 'ok' | 'danger' } | null>(null);
+  // ── the wardrobe ──────────────────────────────────────────────────────
+  const [skins, setSkins] = useState<SkinEntry[]>([]);
+  const [skinsLoading, setSkinsLoading] = useState(true);
+  const [wearingHash, setWearingHash] = useState<string | null>(null);
+  /** Which entry the hero is previewing; null = the account's own skin. */
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [equip, setEquip] = useState<{ id: string; phase: 'busy' | 'ok' | 'fail'; msg: string } | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [duplicateMsg, setDuplicateMsg] = useState<string | null>(null);
+  const [showDragHint, setShowDragHint] = useState(false);
 
-  const flashMessage = useCallback((text: string, tone: 'ok' | 'danger') => {
-    setSkinMessage({ text, tone });
-    if (tone === 'ok') setTimeout(() => setSkinMessage(null), 4000);
-  }, []);
+  const activeAccount = accounts.find((a) => a.id === activeAccountId);
+  const isMsActive = activeAccount?.type === 'microsoft';
+  const isOfflineActive = activeAccount?.type === 'offline';
+  const isSignedOut = isMsActive && activeAccount?.hasSession === false;
+  const canWearCustom = !!isMsActive && !isSignedOut;
+
+  const previewed = previewId ? skins.find((s) => s.id === previewId) ?? null : null;
 
   const loadAccounts = useCallback(async () => {
     try {
@@ -62,57 +119,57 @@ const IdentityView: React.FC = () => {
     }
   }, []);
 
-  const loadSkin = useCallback(async (accountId: string | null, force = false) => {
-    if (!accountId) {
-      setSkinDataUrl(null);
-      setSkinModel('default');
-      return;
-    }
-    const account = accounts.find((a) => a.id === accountId);
-    if (!account || account.type === 'offline') {
-      setSkinDataUrl(null);
-      setSkinModel('default');
-      return;
-    }
-
-    setSkinLoading(true);
+  const loadSkins = useCallback(async () => {
+    setSkinsLoading(true);
     try {
-      const skin = await window.electronAPI.getIdentitySkin(accountId, force);
-      if (skin?.skinUrl) {
-        setSkinDataUrl(skin.skinUrl);
-        const variant: 'classic' | 'slim' = skin.model === 'slim' ? 'slim' : 'classic';
-        setSkinModel(toViewerModel(variant));
-        setSkinVariant(variant);
-      } else {
-        setSkinDataUrl(null);
-      }
+      const result = await window.electronAPI.skinsList();
+      setSkins(result.skins ?? []);
     } catch {
-      setSkinDataUrl(null);
+      setSkins([]);
     } finally {
-      setSkinLoading(false);
+      setSkinsLoading(false);
     }
-  }, [accounts]);
+  }, []);
+
+  // The honest "active" check: hash of what the account is actually wearing,
+  // resolved through the existing skin-service path. Never guessed.
+  const loadWearingHash = useCallback(async (accountId: string | null) => {
+    if (!accountId) { setWearingHash(null); return; }
+    try {
+      const r = await window.electronAPI.skinsWearingHash(accountId);
+      setWearingHash(r.hash);
+    } catch {
+      setWearingHash(null);
+    }
+  }, []);
 
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
 
-  // Push sync: sign-ins that originate OUTSIDE this view (Play screen,
-  // startup import) would otherwise leave the registry rendering "Sign in
-  // with Microsoft" until a manual navigation. The event carries no data —
-  // the re-pull below reads final main-process state.
   useEffect(() => {
-    window.electronAPI.onAuthChanged(() => {
-      loadAccounts();
-    });
+    window.electronAPI.onAuthChanged(() => { loadAccounts(); });
     return () => window.electronAPI.removeAuthChangedListeners();
   }, [loadAccounts]);
+
+  // Account switch → re-read wardrobe + wearing state. Preview resets to the
+  // account skin (previewing someone else's pick across a switch is a lie).
   useEffect(() => {
-    setPendingSkin(null);
-    setSkinMessage(null);
-    loadSkin(activeAccountId);
-  }, [activeAccountId, loadSkin]);
+    setPreviewId(null);
+    setEquip(null);
+    setDuplicateMsg(null);
+    loadSkins();
+    loadWearingHash(activeAccountId);
+  }, [activeAccountId, loadSkins, loadWearingHash]);
 
-  // ── Account actions ───────────────────────────────────────────────────
+  // Drag-rotate hint: shown once per machine, gone after the first drag.
+  useEffect(() => {
+    try { setShowDragHint(!localStorage.getItem(DRAG_HINT_KEY)); } catch { setShowDragHint(false); }
+  }, []);
+  const handleOrbitStart = useCallback(() => {
+    setShowDragHint(false);
+    try { localStorage.setItem(DRAG_HINT_KEY, '1'); } catch { /* private mode */ }
+  }, []);
 
+  // ── account actions (unchanged behaviour, quieter presentation) ───────
   const handleAddMicrosoft = async () => {
     setMsLoading(true);
     setError(null);
@@ -145,24 +202,13 @@ const IdentityView: React.FC = () => {
     }
   };
 
-  const handleSwitchAccount = async (accountId: string) => {
-    if (accountId === activeAccountId) return;
-    setActionLoading(accountId);
-    setConfirmRemoveId(null);
-    try {
-      await window.electronAPI.setActiveAccount(accountId);
-      await loadAccounts();
-    } finally {
-      setActionLoading(null);
-    }
-  };
-
   const handleSignOut = async (accountId: string) => {
     setActionLoading(accountId);
     try {
       const result = await window.electronAPI.signOutAccount(accountId);
       if (!result.success) setError(result.error || 'Sign-out failed.');
       await loadAccounts();
+      await loadWearingHash(activeAccountId);
     } finally {
       setActionLoading(null);
     }
@@ -175,6 +221,7 @@ const IdentityView: React.FC = () => {
       const result = await window.electronAPI.removeAccount(accountId);
       if (!result.success) setError(result.error || 'Failed to remove account.');
       await loadAccounts();
+      await loadWearingHash(activeAccountId);
     } catch {
       setError('Failed to remove account. Please try again.');
     } finally {
@@ -182,60 +229,108 @@ const IdentityView: React.FC = () => {
     }
   };
 
-  // ── Skin actions ──────────────────────────────────────────────────────
+  // ── wardrobe actions ──────────────────────────────────────────────────
+  const refreshWardrobe = useCallback(async () => {
+    await loadSkins();
+    await loadWearingHash(activeAccountId);
+  }, [loadSkins, loadWearingHash, activeAccountId]);
 
-  const handleChooseSkin = async () => {
-    setSkinMessage(null);
-    const result = await window.electronAPI.selectSkinFile();
-    if (!result) return; // dialog canceled
-    if ('error' in result) {
-      flashMessage(result.error, 'danger');
+  const handleAddSkin = async () => {
+    setDuplicateMsg(null);
+    const chosen = await window.electronAPI.selectSkinFile();
+    if (!chosen) return; // dialog canceled
+    if ('error' in chosen) {
+      setDuplicateMsg(chosen.error);
       return;
     }
-    setPendingSkin(result);
-    setPendingVariant(skinVariant);
-  };
-
-  const handleConfirmUpload = async () => {
-    if (!activeAccountId || !pendingSkin) return;
-    setUploadLoading(true);
-    setSkinMessage(null);
-    try {
-      const result = await window.electronAPI.uploadSkin(activeAccountId, pendingVariant);
-      if (!result.success) {
-        flashMessage(result.error || 'Upload failed. Try again.', 'danger');
-        return; // keep the pending skin so they can retry
-      }
-      setSkinDataUrl(result.skin?.skinUrl ?? pendingSkin.dataUrl);
-      setSkinModel(toViewerModel(pendingVariant));
-      setSkinVariant(pendingVariant);
-      setPendingSkin(null);
-      flashMessage('Skin updated. It’s live on your profile.', 'ok');
-    } catch {
-      flashMessage('Upload failed. Check your connection and try again.', 'danger');
-    } finally {
-      setUploadLoading(false);
+    // The chosen path is held in the main process — import consumes it there.
+    const result = await window.electronAPI.skinsImport();
+    if (!result.success) {
+      setDuplicateMsg(result.error || 'Could not add that skin.');
+      return;
+    }
+    await loadSkins();
+    if (result.duplicate && result.message) {
+      setDuplicateMsg(result.message);
+      return;
+    }
+    if (result.skin) {
+      setPreviewId(result.skin.id);
+      setDuplicateMsg(null);
     }
   };
 
-  const handleRefreshSkin = async () => {
+  const handleSaveCurrent = async () => {
     if (!activeAccountId) return;
-    setSkinMessage(null);
-    await loadSkin(activeAccountId, true); // force — bypass the 24h cache
-    flashMessage('Refreshed from Mojang.', 'ok');
+    setDuplicateMsg(null);
+    const result = await window.electronAPI.skinsSaveCurrent(activeAccountId);
+    if (!result.success) {
+      setDuplicateMsg(result.error || 'Could not save that skin.');
+      return;
+    }
+    await refreshWardrobe();
+    if (result.duplicate && result.message) setDuplicateMsg(result.message);
   };
 
-  // ── Derived ───────────────────────────────────────────────────────────
+  const handleEquip = async (skin: SkinEntry) => {
+    if (!canWearCustom) return;
+    setEquip({ id: skin.id, phase: 'busy', msg: 'contacting mojang…' });
+    try {
+      const result = await window.electronAPI.skinsEquip(skin.id);
+      if (!result.success) {
+        setEquip({ id: skin.id, phase: 'fail', msg: result.error || 'couldn’t reach mojang. nothing changed.' });
+        return; // zero state changes on failure
+      }
+      setEquip({ id: skin.id, phase: 'ok', msg: 'wearing it now.' });
+      await refreshWardrobe();
+      // The hero picks the new skin up from the worn-skin hash; keep it shown.
+      setTimeout(() => setEquip(null), 3000);
+    } catch {
+      setEquip({ id: skin.id, phase: 'fail', msg: 'couldn’t reach mojang. nothing changed.' });
+    }
+  };
 
-  const sorted = [...accounts].sort((a, b) => {
-    if (a.id === activeAccountId) return -1;
-    if (b.id === activeAccountId) return 1;
-    return 0;
-  });
+  const handleRename = async (skin: SkinEntry) => {
+    const cleaned = renameValue.trim();
+    setRenamingId(null);
+    if (cleaned === skin.name || !cleaned) return;
+    await window.electronAPI.skinsRename(skin.id, cleaned);
+    await loadSkins();
+  };
 
-  const activeAccount = accounts.find((a) => a.id === activeAccountId);
-  const isMsActive = activeAccount?.type === 'microsoft';
-  const isOfflineActive = activeAccount?.type === 'offline';
+  const handleDelete = async (skin: SkinEntry) => {
+    setConfirmDeleteId(null);
+    await window.electronAPI.skinsDelete(skin.id);
+    if (previewId === skin.id) setPreviewId(null); // hero falls back to the account skin
+    await loadSkins();
+  };
+
+  const handleSetModel = async (skin: SkinEntry, model: 'classic' | 'slim') => {
+    await window.electronAPI.skinsSetModel(skin.id, model);
+    await loadSkins();
+  };
+
+  // ── hero state derivation ─────────────────────────────────────────────
+  // Tri-state per the handbook: undefined = resolving (render nothing),
+  // null = confirmed no custom skin (bundled Steve), string = the skin.
+  const heroUrl: string | null | undefined = previewed
+    ? previewed.dataUrl // null (missing file) is a confirmed state the card explains
+    : skinsLoading || loading || (isMsActive && !isSignedOut && wearingHash === null && !isOfflineActive)
+      ? undefined
+      : null;
+  const heroModel: 'slim' | 'default' = toViewerModel(
+    previewed ? previewed.model : 'classic',
+  );
+  const heroName = previewed ? previewed.name : activeAccount?.username ?? '—';
+  const heroChip = previewed
+    ? previewed.model
+    : isOfflineActive
+      ? 'default'
+      : 'worn skin';
+  const heroActive = previewed ? previewed.hash === wearingHash : true;
+  const heroMissing = !!previewed && previewed.dataUrl === null;
+
+  const libraryEmpty = !skinsLoading && skins.length === 0;
 
   if (loading) {
     return (
@@ -247,305 +342,311 @@ const IdentityView: React.FC = () => {
   }
 
   return (
-    <div className="relative z-[1] flex h-full flex-col items-center overflow-y-auto px-10 pt-20 pb-24">
-      {/* ── Header — quiet, like the stage ─────────────────────────────── */}
-      <div className="rise d1 mb-12 w-full max-w-[520px]">
-        <p className="microlabel mb-3">Account</p>
-        <p className="text-[14px] text-dim">
-          {accounts.length === 0
-            ? 'Sign in with Microsoft to step into the SMP as yourself.'
-            : 'The active account enters the world when you press Play.'}
-        </p>
-      </div>
+    <div className="relative z-[1] flex h-full flex-col items-center overflow-y-auto px-10 pt-16 pb-24">
+      {/* ── Account strip — one quiet row, never a bordered block ────────── */}
+      <div className="rise d1 flex w-full max-w-[640px] items-center gap-3 py-2">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-line">
+          <span className="text-[11px] font-semibold text-dim">
+            {(activeAccount?.username ?? '·').charAt(0).toUpperCase()}
+          </span>
+        </div>
+        <span className="text-[13px] font-medium text-ink">{activeAccount?.username ?? 'no account'}</span>
+        <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-faint">
+          {isOfflineActive
+            ? 'offline'
+            : isSignedOut
+              ? 'signed out'
+              : isMsActive
+                ? 'connected'
+                : '—'}
+        </span>
 
-      {/* ── Accounts shelf — hairlines, not boxes (same language as Worlds) */}
-      <div className="rise d2 flex w-full max-w-[520px] flex-col">
-        {sorted.map((account, idx) => {
-          const isActive = account.id === activeAccountId;
-          const isMs = account.type === 'microsoft';
-          const isBusy = actionLoading === account.id;
-          const signedOut = isMs && account.hasSession === false;
-          const confirming = confirmRemoveId === account.id;
-
-          return (
-            <React.Fragment key={account.id}>
-              {idx > 0 && <div className="hairline-t h-px" />}
-
-              <div className="group relative flex items-center gap-4 py-4 pl-3 pr-4 transition-all duration-micro">
-                {/* Active rail — ember line, the same selection mark as Worlds */}
-                {isActive && (
-                  <span className="absolute left-0 top-1/2 h-7 w-[2px] -translate-y-1/2 rounded-full bg-ember" />
-                )}
-
-                <div className="flex h-8 w-8 shrink-0 items-center justify-center">
-                  {isMs ? (
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={isActive ? 'var(--dim)' : 'var(--faint)'} strokeWidth={1.5} className="transition-colors duration-micro">
-                      <rect x="3" y="3" width="8" height="8" />
-                      <rect x="13" y="3" width="8" height="8" />
-                      <rect x="3" y="13" width="8" height="8" />
-                      <rect x="13" y="13" width="8" height="8" />
-                    </svg>
-                  ) : (
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={isActive ? 'var(--dim)' : 'var(--faint)'} strokeWidth={1.5} strokeLinecap="round" className="transition-colors duration-micro">
-                      <circle cx="12" cy="8" r="4" />
-                      <path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" />
-                    </svg>
-                  )}
-                </div>
-
-                <div className="flex flex-1 flex-col gap-0.5">
-                  <div className="flex items-baseline gap-2">
-                    <span className={`text-[15px] font-semibold tracking-[-0.01em] transition-colors duration-micro ${isActive ? 'text-ink' : 'text-dim group-hover:text-ink'}`}>
-                      {account.username}
-                    </span>
-                    <span className={`text-[10px] font-semibold uppercase tracking-[0.14em] ${isMs ? 'text-dim/70' : 'text-faint'}`}>
-                      {isMs ? 'Microsoft' : 'Offline'}
-                    </span>
-                    {signedOut && (
-                      <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-faint">
-                        Signed out
-                      </span>
-                    )}
-                  </div>
-                  {/* One human fact — internal identifiers stay internal */}
-                  <div className="font-mono text-[10px] tabular-nums text-faint">
-                    {account.lastUsedAt
-                      ? `Last used ${new Date(account.lastUsedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`
-                      : `Added ${new Date(account.createdAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`}
-                  </div>
-                </div>
-
-                {/* Row actions — type carries state; danger only inside confirm */}
-                <div className="flex shrink-0 items-center gap-1.5">
-                  {isBusy ? (
-                    <div className="dot-breathe h-[5px] w-[5px] rounded-full bg-ember" />
-                  ) : confirming ? (
-                    <>
-                      <span className="mr-1 text-[11px] text-dim">Remove this account?</span>
-                      <button
-                        onClick={() => handleRemoveAccount(account.id)}
-                        className="rounded-full px-2.5 py-1 text-[11px] font-medium text-danger transition-colors duration-micro hover:bg-danger/[0.08]"
-                      >
-                        Remove
-                      </button>
-                      <button
-                        onClick={() => setConfirmRemoveId(null)}
-                        className="rounded-full px-2.5 py-1 text-[11px] text-faint transition-colors duration-micro hover:text-dim"
-                      >
-                        Keep
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      {!isActive && (
-                        <button
-                          onClick={() => handleSwitchAccount(account.id)}
-                          className="rounded-full px-2.5 py-1 text-[11px] font-medium text-dim transition-colors duration-micro hover:bg-white/[0.04] hover:text-ink"
-                        >
-                          Switch
-                        </button>
-                      )}
-                      {isActive && isMs && !signedOut && (
-                        <button
-                          onClick={() => handleSignOut(account.id)}
-                          className="rounded-full px-2.5 py-1 text-[11px] text-faint transition-colors duration-micro hover:bg-white/[0.04] hover:text-dim"
-                        >
-                          Sign out
-                        </button>
-                      )}
-                      {isActive && signedOut && (
-                        <button
-                          onClick={handleAddMicrosoft}
-                          disabled={msLoading}
-                          className="rounded-full px-2.5 py-1 text-[11px] font-medium text-dim transition-colors duration-micro hover:bg-white/[0.04] hover:text-ink disabled:opacity-40"
-                        >
-                          {msLoading ? 'Opening Microsoft…' : 'Sign in'}
-                        </button>
-                      )}
-                      <button
-                        onClick={() => setConfirmRemoveId(account.id)}
-                        className="rounded-full p-1.5 text-faint opacity-0 transition-all duration-micro hover:text-dim group-hover:opacity-100"
-                        aria-label={`Remove ${account.username}`}
-                        title="Remove account"
-                      >
-                        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></svg>
-                      </button>
-                    </>
-                  )}
-                </div>
-              </div>
-            </React.Fragment>
-          );
-        })}
-
-        {/* Add account — dashed invitation, never demanding */}
-        {accounts.length === 0 ? (
-          <div className="flex flex-col gap-3 py-4">
-            <button onClick={handleAddMicrosoft} disabled={msLoading} className="pill-ember self-start">
+        <div className="ml-auto flex items-center gap-2.5">
+          {accounts.length > 1 && (
+            <span className="flex items-center gap-1.5 text-[11px] text-faint">
+              <button
+                onClick={() => {
+                  const idx = accounts.findIndex((a) => a.id === activeAccountId);
+                  const prev = accounts[(idx - 1 + accounts.length) % accounts.length];
+                  if (prev) window.electronAPI.setActiveAccount(prev.id).then(loadAccounts);
+                }}
+                className="px-1 transition-colors duration-micro hover:text-dim"
+                aria-label="Previous account"
+              >‹</button>
+              {accounts.findIndex((a) => a.id === activeAccountId) + 1}/{accounts.length}
+              <button
+                onClick={() => {
+                  const idx = accounts.findIndex((a) => a.id === activeAccountId);
+                  const next = accounts[(idx + 1) % accounts.length];
+                  if (next) window.electronAPI.setActiveAccount(next.id).then(loadAccounts);
+                }}
+                className="px-1 transition-colors duration-micro hover:text-dim"
+                aria-label="Next account"
+              >›</button>
+            </span>
+          )}
+          {!activeAccount && (
+            <button onClick={handleAddMicrosoft} disabled={msLoading} className="pill-ember !px-3.5 !py-1.5 !text-[11px]">
               {msLoading ? 'Opening Microsoft…' : 'Sign in with Microsoft'}
             </button>
-            <button onClick={() => setShowOfflineDialog(true)} className="pill-ghost self-start">
-              Add offline account
+          )}
+          {activeAccount && isMsActive && !isSignedOut && (
+            <button
+              onClick={() => handleSignOut(activeAccount.id)}
+              disabled={actionLoading === activeAccount.id}
+              className="text-[11px] text-faint transition-colors duration-micro hover:text-dim disabled:opacity-40"
+            >
+              Sign out
             </button>
+          )}
+          {activeAccountId && confirmRemoveId === activeAccountId ? (
+            <>
+              <span className="text-[11px] text-faint">remove?</span>
+              <button
+                onClick={() => handleRemoveAccount(activeAccountId)}
+                className="text-[11px] text-danger transition-colors duration-micro hover:text-danger/80"
+              >
+                yes
+              </button>
+              <button
+                onClick={() => setConfirmRemoveId(null)}
+                className="text-[11px] text-faint transition-colors duration-micro hover:text-dim"
+              >
+                no
+              </button>
+            </>
+          ) : (
+            activeAccount && (
+              <button
+                onClick={() => setConfirmRemoveId(activeAccountId)}
+                className="text-[11px] text-faint transition-colors duration-micro hover:text-dim"
+                title="Remove account"
+              >
+                remove
+              </button>
+            )
+          )}
+          {activeAccount && isSignedOut && (
+            <button onClick={handleAddMicrosoft} disabled={msLoading} className="text-[11px] text-faint transition-colors duration-micro hover:text-dim">
+              {msLoading ? 'Opening Microsoft…' : 'Sign in'}
+            </button>
+          )}
+          <button
+            onClick={() => setShowOfflineDialog(true)}
+            className="text-[11px] text-faint transition-colors duration-micro hover:text-dim"
+          >
+            Add offline
+          </button>
+        </div>
+      </div>
+      <div className="hairline-t h-px w-full max-w-[640px]" />
+
+      {/* ── The hero — same game. different you. ──────────────────────────── */}
+      <div className="rise d2 flex w-full max-w-[640px] flex-col items-center pt-6">
+        <p className="microlabel mb-2">Identity Studio</p>
+        <p className="text-[13px] text-dim">same game. different you.</p>
+
+        <div className="relative mt-2 h-[300px] w-[200px]">
+          <SkinViewerCanvas
+            skinUrl={heroUrl}
+            model={heroModel}
+            interactive
+            onOrbitStart={handleOrbitStart}
+          />
+          {showDragHint && heroUrl !== undefined && (
+            <p className="pointer-events-none absolute -bottom-1 left-1/2 -translate-x-1/2 text-[11px] text-faint transition-opacity duration-300">
+              drag to rotate
+            </p>
+          )}
+        </div>
+
+        <div className="mt-1 flex items-baseline gap-2">
+          <span className="text-[15px] font-semibold tracking-[-0.01em] text-ink">{heroName}</span>
+          <span className="font-mono text-[10px] tabular-nums text-faint">{heroChip}</span>
+          {!previewed && heroActive && <span className="text-[10px] font-semibold lowercase text-ok/80">active</span>}
+        </div>
+
+        {/* equip — the one ember use on this screen */}
+        {previewed && (
+          <div className="mt-3 flex flex-col items-center gap-2">
+            {heroMissing ? (
+              <p className="text-[11px] text-faint">this skin’s file is missing — delete it and re-add.</p>
+            ) : !canWearCustom ? (
+              <p className="text-[11px] text-faint">
+                offline accounts can’t wear custom skins — skins live on your microsoft account.
+              </p>
+            ) : equip?.id === previewed.id ? (
+              <p className={`text-[11px] ${equip.phase === 'fail' ? 'text-danger/80' : 'text-dim'}`}>{equip.msg}</p>
+            ) : heroActive ? (
+              <span className="text-[11px] text-ok/80">wearing it now.</span>
+            ) : (
+              <button
+                onClick={() => handleEquip(previewed)}
+                className="pill-ember !px-5 !py-2 !text-[12px]"
+              >
+                equip
+              </button>
+            )}
+            {!heroActive && previewed.model !== heroChip && previewed.model && !heroMissing && canWearCustom && equip?.id !== previewed.id && (
+              <div className="flex items-center gap-2 text-[10px] text-faint">
+                <span>wrong arms?</span>
+                <button
+                  onClick={() => handleSetModel(previewed, previewed.model === 'slim' ? 'classic' : 'slim')}
+                  className="underline transition-colors duration-micro hover:text-dim"
+                >
+                  switch to {previewed.model === 'slim' ? 'classic' : 'slim'}
+                </button>
+              </div>
+            )}
           </div>
-        ) : (
-          <>
-            <div className="hairline-t h-px" />
-            <div className="flex items-center gap-4 py-4 pl-3 pr-4">
-              <button
-                onClick={handleAddMicrosoft}
-                disabled={msLoading}
-                className="flex items-center gap-2 text-[13px] font-medium text-faint transition-colors duration-micro hover:text-dim disabled:opacity-30"
-              >
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round">
-                  <path d="M12 5v14M5 12h14" />
-                </svg>
-                {msLoading ? 'Opening Microsoft…' : 'Add Microsoft account'}
-              </button>
-              <span className="text-faint">·</span>
-              <button
-                onClick={() => setShowOfflineDialog(true)}
-                className="text-[13px] font-medium text-faint transition-colors duration-micro hover:text-dim"
-              >
-                Add offline
-              </button>
-            </div>
-          </>
+        )}
+
+        {!previewed && libraryEmpty && canWearCustom && (
+          <button onClick={handleSaveCurrent} className="pill-ember mt-3 !px-5 !py-2.5 !text-[12px]">
+            save this skin to your library
+          </button>
+        )}
+        {!previewed && isOfflineActive && (
+          <p className="mt-3 max-w-[46ch] text-center text-[12px] leading-relaxed text-faint">
+            offline accounts wear the default look. skins live on microsoft accounts —
+            switch to one to build a wardrobe.
+          </p>
+        )}
+        {!previewed && isSignedOut && (
+          <p className="mt-3 max-w-[46ch] text-center text-[12px] leading-relaxed text-faint">
+            sign in with microsoft to wear a skin of your own.
+          </p>
+        )}
+        {duplicateMsg && (
+          <p className="mt-2 text-[11px] text-dim">{duplicateMsg}</p>
         )}
       </div>
 
-      {/* ── Identity Studio ────────────────────────────────────────────── */}
-      {(isMsActive || isOfflineActive) && (
-        <div className="rise d3 mt-10 w-full max-w-[520px]">
-          <div className="hairline-t mb-6 h-px" />
-          <p className="microlabel mb-5">Identity Studio</p>
+      {/* ── The shelf — horizontal wardrobe rail ─────────────────────────── */}
+      <div className="rise d3 mt-8 w-full max-w-[640px]">
+        <div className="hairline-t mb-3 h-px" />
+        <p className="microlabel mb-3">your library</p>
 
-          {isOfflineActive ? (
-            /* Offline accounts wear the default look — say so, quietly. */
-            <p className="text-[13px] leading-relaxed text-faint">
-              Offline accounts wear the default look. Skins live on Microsoft
-              accounts — switch to one to change how you appear in the world.
-            </p>
-          ) : (
-            <div className="flex gap-8">
-              {/* Preview — always mounted; loading and pending overlay it.
-                  While the account's skin resolves the viewer stays hidden
-                  (never flash the default); resolved-null (no custom skin,
-                  offline) shows the bundled Steve via the viewer fallback. */}
-              <div className="relative h-[220px] w-[150px] shrink-0">
-                <SkinViewerCanvas
-                  skinUrl={skinLoading && !pendingSkin ? undefined : (pendingSkin?.dataUrl ?? skinDataUrl)}
-                  model={pendingSkin ? toViewerModel(pendingVariant) : skinModel}
-                />
-                {skinLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="dot-breathe h-[5px] w-[5px] rounded-full bg-ember" />
-                  </div>
-                )}
-              </div>
+        {skinsLoading ? (
+          <div className="flex items-center justify-center gap-2.5 py-8">
+            <div className="dot-breathe h-[5px] w-[5px] rounded-full bg-ember" />
+            <p className="microlabel">Loading skins</p>
+          </div>
+        ) : (
+          <div className="flex items-start gap-3 overflow-x-auto pb-2">
+            {skins.map((skin) => {
+              const isActive = skin.hash === wearingHash && !!wearingHash;
+              const isPreviewed = previewId === skin.id;
+              const isEquipping = equip?.id === skin.id && equip.phase === 'busy';
+              const confirming = confirmDeleteId === skin.id;
+              return (
+                <div
+                  key={skin.id}
+                  onClick={() => { setPreviewId(skin.id); setEquip(null); }}
+                  className={`group relative flex w-[104px] shrink-0 cursor-pointer flex-col items-center gap-1.5 rounded-[10px] border px-3 py-3 transition-all duration-micro ease-exit hover:-translate-y-0.5 ${
+                    isPreviewed
+                      ? 'border-ember/60 bg-white/[0.02]'
+                      : 'border-line bg-transparent hover:border-line-strong'
+                  }`}
+                >
+                  <SkinHead dataUrl={skin.dataUrl} />
+                  {renamingId === skin.id ? (
+                    <input
+                      value={renameValue}
+                      autoFocus
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') handleRename(skin);
+                        if (e.key === 'Escape') setRenamingId(null);
+                      }}
+                      onBlur={() => handleRename(skin)}
+                      maxLength={40}
+                      className="w-full rounded-[4px] border border-line-strong bg-white/[0.03] px-1 py-0.5 text-center text-[11px] text-ink outline-none"
+                    />
+                  ) : (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRenamingId(skin.id);
+                        setRenameValue(skin.name);
+                      }}
+                      className="max-w-full truncate text-[11px] lowercase text-dim transition-colors duration-micro hover:text-ink"
+                      title="Rename"
+                    >
+                      {skin.name}
+                    </button>
+                  )}
 
-              {/* Controls — progressive: upload params appear only when a
-                  new skin is staged */}
-              <div className="flex flex-1 flex-col justify-center gap-4">
-                {pendingSkin ? (
-                  <>
-                    <div>
-                      <p className="text-[13px] font-medium text-ink">New skin staged.</p>
-                      <p className="mt-1 text-[12px] leading-relaxed text-dim">
-                        This is a preview — nothing changes until you use it.
-                      </p>
-                    </div>
-
-                    <div>
-                      <p className="microlabel mb-2">Arm style</p>
-                      <div className="flex gap-2">
-                        {(['classic', 'slim'] as const).map((v) => (
-                          <button
-                            key={v}
-                            onClick={() => setPendingVariant(v)}
-                            className={`rounded-full px-3 py-1.5 text-[11px] font-medium transition-colors duration-micro ${
-                              pendingVariant === v
-                                ? 'bg-white/[0.06] text-ink'
-                                : 'text-faint hover:bg-white/[0.03] hover:text-dim'
-                            }`}
-                          >
-                            {v === 'classic' ? 'Classic' : 'Slim'}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3">
+                  {isActive ? (
+                    <>
+                      <span className="h-[2px] w-8 rounded-full bg-ember" aria-hidden />
+                      <span className="text-[10px] lowercase text-ok/80">active</span>
+                    </>
+                  ) : confirming ? (
+                    <div className="flex items-center gap-1 text-[10px]">
+                      <span className="text-faint">delete?</span>
                       <button
-                        onClick={handleConfirmUpload}
-                        disabled={uploadLoading}
-                        className="pill-ember !px-5 !py-2.5 !text-[13px] disabled:opacity-40"
+                        onClick={(e) => { e.stopPropagation(); handleDelete(skin); }}
+                        className="text-danger transition-colors duration-micro hover:text-danger/80"
                       >
-                        {uploadLoading ? 'Uploading…' : 'Use this skin'}
+                        yes
                       </button>
                       <button
-                        onClick={() => { setPendingSkin(null); setSkinMessage(null); }}
-                        disabled={uploadLoading}
-                        className="text-[12px] text-faint transition-colors duration-micro hover:text-dim disabled:opacity-40"
+                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(null); }}
+                        className="text-faint transition-colors duration-micro hover:text-dim"
                       >
-                        Keep current
+                        no
                       </button>
                     </div>
-                  </>
-                ) : (
-                  <>
-                    <div className="font-mono text-[11px] tabular-nums text-faint">
-                      {skinDataUrl
-                        ? (skinVariant === 'slim' ? 'Slim' : 'Classic')
-                        : 'Nothing here yet'}
-                    </div>
-
-                    <div className="flex items-center gap-2">
+                  ) : (
+                    <div className="flex items-center gap-1.5 opacity-0 transition-opacity duration-micro group-hover:opacity-100">
                       <button
-                        onClick={handleChooseSkin}
-                        disabled={skinLoading}
-                        className="pill-ghost !px-4 !py-2 !text-[12px] disabled:opacity-30"
+                        onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(skin.id); }}
+                        className="text-[10px] text-faint transition-colors duration-micro hover:text-danger"
+                        title="Delete skin"
                       >
-                        Upload a skin
+                        delete
                       </button>
+                      <span className="text-faint">·</span>
                       <button
-                        onClick={handleRefreshSkin}
-                        disabled={skinLoading}
-                        className="rounded-full p-2 text-faint transition-colors duration-micro hover:bg-white/[0.03] hover:text-dim disabled:opacity-30"
-                        aria-label="Refresh skin from Mojang"
-                        title="Refresh from Mojang"
+                        onClick={(e) => { e.stopPropagation(); window.electronAPI.skinsReveal(skin.id); }}
+                        className="text-[10px] text-faint transition-colors duration-micro hover:text-dim"
+                        title="Show in folder"
                       >
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round">
-                          <path d="M21 12a9 9 0 11-3-6.7L21 8M21 3v5h-5" />
-                        </svg>
+                        reveal
                       </button>
                     </div>
+                  )}
+                  {isEquipping && <div className="dot-breathe absolute right-2 top-2 h-[4px] w-[4px] rounded-full bg-ember" />}
+                </div>
+              );
+            })}
 
-                    <p className="text-[11px] leading-relaxed text-faint">
-                      64×64 PNG. Changes apply to your Minecraft profile everywhere.
-                    </p>
-                  </>
-                )}
-
-                {skinMessage && (
-                  <p className={`text-[11px] ${skinMessage.tone === 'danger' ? 'text-danger/80' : 'text-ok/70'}`}>
-                    {skinMessage.text}
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
+            {/* [+ add] — the dashed invitation */}
+            <button
+              onClick={handleAddSkin}
+              className="group flex w-[104px] shrink-0 flex-col items-center justify-center gap-1.5 rounded-[10px] border border-dashed border-line-strong px-3 py-3 transition-colors duration-micro hover:border-dim"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--faint)" strokeWidth={1.5} strokeLinecap="round" className="transition-colors duration-micro group-hover:stroke-[var(--dim)]">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+              <span className="text-[11px] lowercase text-faint transition-colors duration-micro group-hover:text-dim">
+                add a skin
+              </span>
+            </button>
+          </div>
+        )}
+      </div>
 
       {/* Error line — words, not boxes */}
       {error && (
-        <div className="rise mt-4 w-full max-w-[520px]">
+        <div className="rise mt-4 w-full max-w-[640px]">
           <p className="text-[12px] text-danger/80">{error}</p>
         </div>
       )}
 
-      {/* ── Offline account dialog ─────────────────────────────────────── */}
+      {/* ── Offline account dialog (preserved as-is) ─────────────────────── */}
       {showOfflineDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center">
           <div className="absolute inset-0 bg-black/50" onClick={() => setShowOfflineDialog(false)} />

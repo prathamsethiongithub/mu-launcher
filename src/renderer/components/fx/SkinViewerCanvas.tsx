@@ -63,6 +63,16 @@ interface SkinViewerProps {
   /** Shown only while the skin is unresolved (undefined). Default null —
    *  render nothing (the Play stage stays clean). */
   emptyLabel?: string | null;
+  /**
+   * Identity Studio only: enable orbit drag-rotation (skinview3d's own
+   * OrbitControls — zoom/pan stay off) and give the canvas pointer events.
+   * Default false: the Play stage keeps its pointer-events-none ambience.
+   * Gaze (window-level head tracking) is unchanged either way.
+   */
+  interactive?: boolean;
+  /** Fires once on the first orbit-drag start — the "drag to rotate" hint
+   *  fade-out hook. Only meaningful with interactive. */
+  onOrbitStart?: () => void;
 }
 
 const SkinViewerCanvas: React.FC<SkinViewerProps> = ({
@@ -70,6 +80,8 @@ const SkinViewerCanvas: React.FC<SkinViewerProps> = ({
   model = 'default',
   energetic = false,
   emptyLabel = null,
+  interactive = false,
+  onOrbitStart,
 }) => {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -269,6 +281,25 @@ const SkinViewerCanvas: React.FC<SkinViewerProps> = ({
     }
   }, [energetic]);
 
+  // ── Interactive orbit (Identity Studio) ────────────────────────────────
+  // Flips skinview3d's own OrbitControls rotate flag — the minimal touch the
+  // studio needs for drag-rotate. Reduced-motion keeps the static pose (the
+  // render loop is paused, so orbiting a paused canvas shows nothing).
+  const onOrbitStartRef = useRef(onOrbitStart);
+  useEffect(() => {
+    onOrbitStartRef.current = onOrbitStart;
+  }, [onOrbitStart]);
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+    const enabled = interactive && !reducedRef.current;
+    viewer.controls.enableRotate = enabled;
+    if (!enabled) return;
+    const onStart = () => onOrbitStartRef.current?.();
+    viewer.controls.addEventListener('start', onStart);
+    return () => viewer.controls.removeEventListener('start', onStart);
+  }, [interactive]);
+
   // Load skin when skinUrl or model changes.
   // undefined = unresolved (stay hidden); null = confirmed no custom skin
   // (bundled Steve, always 'default' arms); string = that custom skin, with
@@ -331,7 +362,11 @@ const SkinViewerCanvas: React.FC<SkinViewerProps> = ({
   // unresolved, but the viewer-init effect runs once at mount before the
   // skin arrives, so no viewer was ever created and renders stayed blank.)
   return (
-    <div ref={wrapRef} className="pointer-events-none relative h-full w-full" aria-hidden>
+    <div
+      ref={wrapRef}
+      className={`relative h-full w-full ${interactive ? '' : 'pointer-events-none'}`}
+      aria-hidden
+    >
       <canvas
         ref={canvasRef}
         className="h-full w-full transition-opacity duration-scene ease-exit"
