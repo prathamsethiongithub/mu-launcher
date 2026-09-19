@@ -375,6 +375,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   uploadSkin: (accountId: string, model: string) =>
     ipcRenderer.invoke('upload-skin', accountId, model) as Promise<{ success: boolean; error?: string; skin?: SkinProfile }>,
 
+  // ── Skin sync (equip → all views) ──────────────────────────────────────
+  /** Fires after a successful equip so every view can re-pull its skin. */
+  onSkinChanged: (callback: (payload: { accountId: string; model: 'classic' | 'slim'; changedAt: string }) => void) => {
+    ipcRenderer.on('skin-changed', (_event, payload) => callback(payload));
+  },
+  removeSkinChangedListeners: () => {
+    ipcRenderer.removeAllListeners('skin-changed');
+  },
+
   // ── Skin Library (Identity Studio) ─────────────────────────────────────
   /** Every saved skin; dataUrl = its PNG (null → the file is missing). */
   skinsList: () =>
