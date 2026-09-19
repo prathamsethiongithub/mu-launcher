@@ -3,6 +3,7 @@ import SkinViewerCanvas from './fx/SkinViewerCanvas';
 import { playEquipSwell, playSelectTick } from '../studio-audio';
 import {
   classifyStudioVisit,
+  equipButtonKind,
   formatWearingSince,
   hasReturnedAfterAbsence,
   isFirstSkin,
@@ -113,6 +114,9 @@ const IdentityView: React.FC = () => {
   const [mirrorLine, setMirrorLine] = useState<string | null>(null);
   const [firstSkinMsg, setFirstSkinMsg] = useState<string | null>(null);
   const [firstInId, setFirstInId] = useState<string | null>(null);
+  /** Success dissolve (300 ms scene) + the 200 ms red flash on failure. */
+  const [dissolving, setDissolving] = useState(false);
+  const [failFlash, setFailFlash] = useState(false);
   /** Pleasure sensor: actions recorded this visit, classified on unmount. */
   const sensorActionsRef = useRef<string[]>([]);
 
@@ -348,21 +352,32 @@ const IdentityView: React.FC = () => {
 
   const handleEquip = async (skin: SkinEntry) => {
     if (!canWearCustom) return;
-    setEquip({ id: skin.id, phase: 'busy', msg: 'contacting mojang…' });
+    setEquip({ id: skin.id, phase: 'busy', msg: 'wearing it now.' });
     try {
       const result = await window.electronAPI.skinsEquip(skin.id);
       if (!result.success) {
         setEquip({ id: skin.id, phase: 'fail', msg: result.error || 'couldn’t reach mojang. nothing changed.' });
+        setFailFlash(true);
+        setTimeout(() => setFailFlash(false), 200); // amber flashes red once, then returns
         return; // zero state changes on failure
       }
-      setEquip({ id: skin.id, phase: 'ok', msg: 'wearing it now.' });
       playEquipSwell();
       recordAction('equip');
       await refreshWardrobe();
-      // The hero picks the new skin up from the worn-skin hash; keep it shown.
-      setTimeout(() => setEquip(null), 3000);
+      // The ceremony chain: dissolve (300 ms scene) → the hero falls back to
+      // the worn account skin and remounts (key bump → onShown GREETING) while
+      // the shelf card's amber underline lands via its scaleX transition.
+      setDissolving(true);
+      setTimeout(() => {
+        setDissolving(false);
+        setPreviewId(null);
+        setMirrorEpoch((e) => e + 1);
+        setEquip(null);
+      }, 300);
     } catch {
       setEquip({ id: skin.id, phase: 'fail', msg: 'couldn’t reach mojang. nothing changed.' });
+      setFailFlash(true);
+      setTimeout(() => setFailFlash(false), 200);
     }
   };
 
@@ -556,27 +571,63 @@ const IdentityView: React.FC = () => {
           </p>
         )}
 
-        {/* equip — the one ember use on this screen */}
+        {/* equip — the ceremony. The one amber BLOCK on this screen; the
+            gaze layer needs no code: it already tracks the cursor, so
+            hovering the button IS the gaze shift, and leaving returns it. */}
         {previewed && (
           <div className="mt-3 flex flex-col items-center gap-2">
-            {heroMissing ? (
-              <p className="text-[11px] text-faint">this skin’s file is missing — delete it and re-add.</p>
-            ) : !canWearCustom ? (
-              <p className="text-[11px] text-faint">
-                offline accounts can’t wear custom skins — skins live on your microsoft account.
-              </p>
-            ) : equip?.id === previewed.id ? (
-              <p className={`text-[11px] ${equip.phase === 'fail' ? 'text-danger/80' : 'text-dim'}`}>{equip.msg}</p>
-            ) : heroActive ? (
-              <span className="text-[11px] text-ok/80">wearing it now.</span>
-            ) : (
-              <button
-                onClick={() => handleEquip(previewed)}
-                className="pill-ember !px-5 !py-2 !text-[12px]"
-              >
-                equip
-              </button>
-            )}
+            {(() => {
+              const kind = equipButtonKind({
+                previewed: true,
+                heroMissing,
+                isActiveSkin: heroActive,
+                canWearCustom,
+                phase: dissolving ? 'dissolving' : equip?.id === previewed.id && equip.phase === 'busy' ? 'busy' : 'idle',
+              });
+              if (kind.kind === 'wearing') {
+                return <span className="text-[11px] lowercase text-ok/80">wearing it</span>;
+              }
+              if (kind.kind === 'missing') {
+                return <p className="text-[11px] text-faint">this skin’s file is missing — delete it and re-add.</p>;
+              }
+              if (kind.kind === 'disabled-offline') {
+                return (
+                  <>
+                    <button
+                      disabled
+                      className="cursor-default rounded-full bg-white/[0.05] px-[28px] py-[10px] text-[15px] font-semibold lowercase text-faint"
+                    >
+                      equip
+                    </button>
+                    <p className="text-[11px] text-faint">requires microsoft</p>
+                  </>
+                );
+              }
+              const isBusy = kind.kind === 'busy';
+              const isDissolving = kind.kind === 'dissolving';
+              return (
+                <>
+                  <style>{`@keyframes equip-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.95; } }`}</style>
+                  <button
+                    onClick={() => handleEquip(previewed)}
+                    disabled={isBusy || isDissolving}
+                    style={isBusy ? { animation: 'equip-pulse 800ms ease-in-out infinite' } : undefined}
+                    className={`rounded-full bg-ember px-[28px] py-[10px] text-[15px] font-semibold lowercase text-[var(--ground)] transition-all duration-micro ease-exit hover:-translate-y-0.5 hover:brightness-105 active:scale-[0.97] active:brightness-90 disabled:cursor-default ${
+                      failFlash
+                        ? 'border border-danger bg-danger/20 text-danger'
+                        : isDissolving
+                          ? 'opacity-0'
+                          : 'border border-ember'
+                    }`}
+                  >
+                    {isBusy ? 'wearing it now.' : 'equip'}
+                  </button>
+                  {equip?.id === previewed.id && equip.phase === 'fail' && (
+                    <p className="text-[11px] text-danger/80">{equip.msg}</p>
+                  )}
+                </>
+              );
+            })()}
             {!heroActive && previewed.model !== heroChip && previewed.model && !heroMissing && canWearCustom && equip?.id !== previewed.id && (
               <div className="flex items-center gap-2 text-[10px] text-faint">
                 <span>wrong arms?</span>
