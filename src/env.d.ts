@@ -200,6 +200,30 @@ interface ElectronAPI {
   /** Upload the previously selected skin file for an account. */
   uploadSkin: (accountId: string, model: string) => Promise<{ success: boolean; error?: string; skin?: SkinProfile }>;
 
+  // ── Skin Library (Identity Studio) ─────────────────────────────────────
+  /** Saved skin entry; dataUrl = its PNG (null → the file is missing). */
+  skinsList: () => Promise<{
+    skins: {
+      id: string; name: string; fileName: string; model: 'classic' | 'slim';
+      addedAt: string; lastEquippedAt?: string; hash: string; dataUrl: string | null;
+    }[];
+  }>;
+  skinsImport: () => Promise<{
+    success: boolean; duplicate?: boolean; message?: string; error?: string;
+    skin?: { id: string; name: string; fileName: string; model: 'classic' | 'slim'; addedAt: string; lastEquippedAt?: string; hash: string };
+  }>;
+  skinsSaveCurrent: (accountId: string) => Promise<{
+    success: boolean; duplicate?: boolean; message?: string; error?: string;
+    skin?: { id: string; name: string; fileName: string; model: 'classic' | 'slim'; addedAt: string; lastEquippedAt?: string; hash: string };
+  }>;
+  skinsDelete: (skinId: string) => Promise<{ success: boolean }>;
+  skinsRename: (skinId: string, name: string) => Promise<{ success: boolean; error?: string }>;
+  skinsSetModel: (skinId: string, model: 'classic' | 'slim') => Promise<{ success: boolean; error?: string }>;
+  skinsEquip: (skinId: string) => Promise<{ success: boolean; code?: string; error?: string; skin?: SkinProfile }>;
+  skinsReveal: (skinId: string) => Promise<{ success: boolean; error?: string }>;
+  /** sha1 of the skin the active account is actually wearing (null = unknown). */
+  skinsWearingHash: (accountId: string) => Promise<{ hash: string | null }>;
+
   /** Returns whether the game is currently running. */
   isGameRunning: () => Promise<boolean>;
 

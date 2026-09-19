@@ -375,6 +375,41 @@ contextBridge.exposeInMainWorld('electronAPI', {
   uploadSkin: (accountId: string, model: string) =>
     ipcRenderer.invoke('upload-skin', accountId, model) as Promise<{ success: boolean; error?: string; skin?: SkinProfile }>,
 
+  // ── Skin Library (Identity Studio) ─────────────────────────────────────
+  /** Every saved skin; dataUrl = its PNG (null → the file is missing). */
+  skinsList: () =>
+    ipcRenderer.invoke('skins-list') as Promise<{
+      skins: {
+        id: string; name: string; fileName: string; model: 'classic' | 'slim';
+        addedAt: string; lastEquippedAt?: string; hash: string; dataUrl: string | null;
+      }[];
+    }>,
+  /** Imports the file chosen via selectSkinFile (main-process custody). */
+  skinsImport: () =>
+    ipcRenderer.invoke('skins-import') as Promise<{
+      success: boolean; duplicate?: boolean; message?: string; error?: string;
+      skin?: { id: string; name: string; fileName: string; model: 'classic' | 'slim'; addedAt: string; lastEquippedAt?: string; hash: string };
+    }>,
+  /** Saves the account's currently worn skin into the library. */
+  skinsSaveCurrent: (accountId: string) =>
+    ipcRenderer.invoke('skins-save-current', accountId) as Promise<{
+      success: boolean; duplicate?: boolean; message?: string; error?: string;
+      skin?: { id: string; name: string; fileName: string; model: 'classic' | 'slim'; addedAt: string; lastEquippedAt?: string; hash: string };
+    }>,
+  skinsDelete: (skinId: string) =>
+    ipcRenderer.invoke('skins-delete', skinId) as Promise<{ success: boolean }>,
+  skinsRename: (skinId: string, name: string) =>
+    ipcRenderer.invoke('skins-rename', skinId, name) as Promise<{ success: boolean; error?: string }>,
+  skinsSetModel: (skinId: string, model: 'classic' | 'slim') =>
+    ipcRenderer.invoke('skins-set-model', skinId, model) as Promise<{ success: boolean; error?: string }>,
+  skinsEquip: (skinId: string) =>
+    ipcRenderer.invoke('skins-equip', skinId) as Promise<{ success: boolean; code?: string; error?: string; skin?: SkinProfile }>,
+  skinsReveal: (skinId: string) =>
+    ipcRenderer.invoke('skins-reveal', skinId) as Promise<{ success: boolean; error?: string }>,
+  /** sha1 of the skin the active account is actually wearing (null = unknown). */
+  skinsWearingHash: (accountId: string) =>
+    ipcRenderer.invoke('skins-wearing-hash', accountId) as Promise<{ hash: string | null }>,
+
   /**
    * Registers a listener for launch step events.
    * Callback receives (step, status, progress).

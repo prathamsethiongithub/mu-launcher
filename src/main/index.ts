@@ -1,6 +1,6 @@
 import { app, BrowserWindow, ipcMain, shell, dialog } from 'electron';
 import { join } from 'path';
-import { readFileSync, statSync, rmSync } from 'fs';
+import { existsSync, readFileSync, statSync, rmSync } from 'fs';
 import { readdir, stat } from 'fs/promises';
 import { is } from '@electron-toolkit/utils';
 import { AuthService } from './auth-service';
@@ -18,6 +18,7 @@ import { initTray, disposeTray } from './tray-manager';
 import { diagnoseLastCrash } from './crash-diagnostic';
 import { checkForUpdates, performUpdate } from './update-checker';
 import { IdentityService } from './identity-service';
+import { SkinLibrary, sha1Hex } from './skin-library';
 import type { Account, LoaderType } from '../shared/types';
 
 // ── Process-level error shielding ───────────────────────────────────────
@@ -39,6 +40,7 @@ let launchManager: LaunchManager | null = null;
 let javaProvisioner: JavaProvisioner | null = null;
 let worldManager: WorldManager | null = null;
 let identityService: IdentityService | null = null;
+let skinLibrary: SkinLibrary | null = null;
 let launchInProgress = false;
 // Skin file chosen via the main-process dialog. Uploads read this — the
 // renderer never supplies (or sees) a filesystem path.
@@ -1425,6 +1427,142 @@ function registerIpcHandlers(): void {
     return identityService.uploadSkin(accountId, pendingSkinPath, model);
   });
 
+  // ── Skin Library (Identity Studio) ─────────────────────────────────────
+  // All channels are NEW — the existing upload-skin/select-skin-file path is
+  // untouched. equip reuses identityService.uploadSkin (with its 401 →
+  // refresh → retry); import consumes the select-skin-file custody path.
+
+  /** 'skins-list' — every saved skin, each with its PNG as a data URL (shelf preview). */
+  ipcMain.handle('skins-list', () => {
+    const lib = skinLibrary;
+    const skins = lib
+      ? lib.list().map((s) => {
+          let dataUrl: string | null = null;
+          try {
+            const p = lib.filePath(s.id);
+            if (existsSync(p)) dataUrl = `data:image/png;base64,${readFileSync(p).toString('base64')}`;
+          } catch {
+            dataUrl = null; // unreadable file → the card renders its "missing" state
+          }
+          return { ...s, dataUrl };
+        })
+      : [];
+    return { skins };
+  });
+
+  /**
+   * 'skins-import' — Imports the file previously chosen via 'select-skin-file'
+   * (the path stays in main-process custody). Dedupes by content sha1.
+   */
+  ipcMain.handle('skins-import', () => {
+    if (!skinLibrary) return { success: false, error: 'Library not initialized.' };
+    if (!pendingSkinPath) return { success: false, error: 'Choose a skin file first.' };
+    const suggested = pendingSkinPath.split(/[\\/]/).pop()?.replace(/\.png$/i, '') ?? 'unnamed skin';
+    const result = skinLibrary.importFromPath(pendingSkinPath, suggested);
+    if (result.status === 'rejected') return { success: false, error: result.reason };
+    return {
+      success: true,
+      duplicate: result.status === 'duplicate',
+      message: result.status === 'duplicate' ? result.message : undefined,
+      skin: result.skin,
+    };
+  });
+
+  /** 'skins-save-current' — Saves the active account's worn skin into the library. */
+  ipcMain.handle('skins-save-current', async (_event, accountId: string) => {
+    if (!skinLibrary) return { success: false, error: 'Library not initialized.' };
+    if (!identityService) return { success: false, error: 'Identity system not initialized.' };
+    try {
+      const skin = await identityService.getSkin(accountId);
+      if (!skin?.skinUrl?.startsWith('data:image/png;base64,')) {
+        return { success: false, error: 'No skin to save yet.' };
+      }
+      const bytes = Buffer.from(skin.skinUrl.slice('data:image/png;base64,'.length), 'base64');
+      const account = identityService.getAccounts().find((a) => a.id === accountId);
+      const result = skinLibrary.importBuffer(bytes, account?.username ?? 'worn skin');
+      if (result.status === 'rejected') return { success: false, error: result.reason };
+      return {
+        success: true,
+        duplicate: result.status === 'duplicate',
+        message: result.status === 'duplicate' ? result.message : undefined,
+        skin: result.skin,
+      };
+    } catch (err) {
+      return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  /** 'skins-delete' — Removes a library entry (registry + PNG). */
+  ipcMain.handle('skins-delete', (_event, skinId: string) => {
+    if (!skinLibrary) return { success: false };
+    return { success: skinLibrary.remove(skinId) };
+  });
+
+  /** 'skins-rename' — In-place rename (shelf inline editor). */
+  ipcMain.handle('skins-rename', (_event, skinId: string, name: string) => {
+    if (!skinLibrary) return { success: false };
+    const skin = skinLibrary.rename(skinId, name);
+    return skin ? { success: true, skin } : { success: false, error: 'Skin not found.' };
+  });
+
+  /** 'skins-set-model' — Manual classic/slim override (the uncertain case). */
+  ipcMain.handle('skins-set-model', (_event, skinId: string, model: string) => {
+    if (!skinLibrary) return { success: false };
+    if (model !== 'classic' && model !== 'slim') return { success: false, error: 'Invalid model.' };
+    const skin = skinLibrary.setModel(skinId, model);
+    return skin ? { success: true, skin } : { success: false, error: 'Skin not found.' };
+  });
+
+  /**
+   * 'skins-equip' — Wears a library skin: reads the library PNG and reuses
+   * the EXISTING identityService.uploadSkin path (401 → refresh → retry).
+   * Offline accounts get an explicit refusal — skins live on the account.
+   */
+  ipcMain.handle('skins-equip', async (_event, skinId: string) => {
+    if (!skinLibrary) return { success: false, error: 'Library not initialized.' };
+    if (!identityService) return { success: false, error: 'Identity system not initialized.' };
+    const account = identityService.getActiveAccount();
+    if (!account) return { success: false, code: 'no-account', error: 'No active account. Sign in first.' };
+    if (account.type === 'offline') {
+      return {
+        success: false,
+        code: 'offline',
+        error: 'Offline accounts can’t wear custom skins — skins live on your Microsoft account.',
+      };
+    }
+    const skin = skinLibrary.get(skinId);
+    if (!skin) return { success: false, code: 'missing', error: 'That skin is no longer in your library.' };
+    if (!skinLibrary.fileExists(skinId)) {
+      return { success: false, code: 'missing', error: 'That skin’s file is missing. Delete it and re-add.' };
+    }
+    return identityService.uploadSkin(account.id, skinLibrary.filePath(skinId), skin.model);
+  });
+
+  /** 'skins-reveal' — Shows the library PNG in Explorer. */
+  ipcMain.handle('skins-reveal', (_event, skinId: string) => {
+    if (!skinLibrary) return { success: false };
+    if (!skinLibrary.fileExists(skinId)) return { success: false, error: 'That skin’s file is missing.' };
+    shell.showItemInFolder(skinLibrary.filePath(skinId));
+    return { success: true };
+  });
+
+  /**
+   * 'skins-wearing-hash' — The honesty anchor: sha1 of the skin the active
+   * account is ACTUALLY wearing (resolved through the existing skin-service
+   * path). A library entry is only marked "active" when its hash matches.
+   */
+  ipcMain.handle('skins-wearing-hash', async (_event, accountId: string) => {
+    if (!identityService) return { hash: null };
+    try {
+      const skin = await identityService.getSkin(accountId);
+      if (!skin?.skinUrl?.startsWith('data:image/png;base64,')) return { hash: null };
+      const bytes = Buffer.from(skin.skinUrl.slice('data:image/png;base64,'.length), 'base64');
+      return { hash: sha1Hex(bytes) };
+    } catch {
+      return { hash: null };
+    }
+  });
+
   /**
    * 'identity-sign-out' — Ends an account's session but keeps the account
    * listed. If the account is also the legacy launch session (same UUID),
@@ -1549,6 +1687,9 @@ app.whenReady().then(() => {
   // Initialize the IdentityService singleton — manages accounts, sessions,
   // and skin state. Loads from identity.json + encrypted token store.
   identityService = new IdentityService();
+
+  // The skin library (Identity Studio) — registry + PNG files under userData.
+  skinLibrary = new SkinLibrary(app.getPath('userData'));
 
   // ── Startup Session Reconciliation ─────────────────────────────────
   // If AuthService has a valid session but IdentityService lacks tokens
