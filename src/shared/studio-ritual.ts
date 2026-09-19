@@ -87,3 +87,48 @@ export function classifyStudioVisit(actions: string[]): StudioVisitKind {
   if (sawTask) return 'task';
   return 'pleasure'; // a quiet look is still the wardrobe doing its job
 }
+
+// ── the equip ceremony button ───────────────────────────────────────────────
+
+export type EquipButtonPhase = 'idle' | 'busy' | 'dissolving';
+
+export type EquipButtonKind =
+  | { kind: 'wearing' }
+  | { kind: 'idle' }
+  | { kind: 'busy' }
+  | { kind: 'dissolving' }
+  | { kind: 'disabled-offline' }
+  | { kind: 'missing' };
+
+/**
+ * Four-state machine for the solid amber equip button, pure so vitest pins it.
+ *
+ *   'wearing'          no button at all: this skin is already on the account
+ *                      (fine "wearing it" text renders instead)
+ *   'idle'             the solid amber equip button, hover/press alive
+ *   'busy'             in-flight: "wearing it now." + pulse, not clickable
+ *   'dissolving'       success: the 300 ms fade before the hero reloads
+ *   'disabled-offline' offline account: disabled + "requires microsoft"
+ *   'missing'          the library file is gone — equip is impossible
+ *
+ * Precedence (verified against the studio's real flows): a missing file or an
+ * in-flight/dissolving request always wins over the trivially-active check —
+ * those states describe the REQUEST, not the wardrobe.
+ */
+export function equipButtonKind(input: {
+  previewed: boolean;
+  heroMissing: boolean;
+  isActiveSkin: boolean;
+  canWearCustom: boolean;
+  phase: EquipButtonPhase;
+}): EquipButtonKind {
+  if (!input.previewed) {
+    return input.isActiveSkin ? { kind: 'wearing' } : { kind: 'idle' };
+  }
+  if (input.heroMissing) return { kind: 'missing' };
+  if (input.phase === 'dissolving') return { kind: 'dissolving' };
+  if (input.phase === 'busy') return { kind: 'busy' };
+  if (!input.canWearCustom) return { kind: 'disabled-offline' };
+  if (input.isActiveSkin) return { kind: 'wearing' };
+  return { kind: 'idle' };
+}
