@@ -138,9 +138,12 @@ export function detectModName(head: string): string | undefined {
   const frames = head.matchAll(/^[ \t]*at[ \t]+((?:[a-z][\w]*\.)+)[A-Z]/gm);
   for (const frame of frames) {
     const parts = frame[1].split('.').filter(Boolean);
-    // Rebuild the package path two segments at a time and stop at the
-    // first known non-mod root ("net.minecraft", "java", ...).
-    for (let depth = 2; depth <= parts.length; depth++) {
+    // Rebuild the package path one segment at a time and stop at the
+    // first known non-mod root ("net.minecraft", "java", ...). Starting
+    // at 1 checks the single-segment roots too — JDK frames like
+    // java.lang.Thread.run must hit the 'java' whitelist, not fall off
+    // the end and surface 'lang' as a mod name.
+    for (let depth = 1; depth <= parts.length; depth++) {
       const pkg = parts.slice(0, depth).join('.');
       if (NON_MOD_PACKAGES.has(pkg)) break; // vanilla/library — not a mod
       if (depth === parts.length) {

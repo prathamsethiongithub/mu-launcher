@@ -107,19 +107,27 @@ describe('detectModName', () => {
     expect(detectModName(head)).toBe('Sodium');
   });
 
-  it('现状如此，疑似 bug: JDK frames are misattributed as mods (java.lang → "Lang")', () => {
-    // NON_MOD_PACKAGES contains the single segments 'java'/'sun'/'jdk', but
-    // the depth loop starts at 2 and only tests 2-segment prefixes
-    // ('java.lang' is not in the set), so the walk falls off the end and
-    // parts[1] ('lang') is returned as a mod name. Any log whose only
-    // frames are JDK frames therefore gets a bogus mod attribution.
-    // Recorded in docs/project-truth/18-TRUST-REPAIR-LOG.md; production
-    // code intentionally untouched per the task brief.
+  it('does not misattribute pure JDK frames (java.lang.*)', () => {
+    // Fixed regression guard: NON_MOD_PACKAGES whitelists the single roots
+    // 'java'/'sun'/'jdk', but the depth loop used to start at 2, so the
+    // 1-segment roots were never checked and 'java.lang.Thread.run' was
+    // misattributed as a mod named "Lang".
     const head = [
       'java.lang.OutOfMemoryError: Java heap space',
       '\tat java.lang.Thread.run(Thread.java:834)',
     ].join('\n');
-    expect(detectModName(head)).toBe('Lang');
+    expect(detectModName(head)).toBeUndefined();
+  });
+
+  it('does not misattribute other single-root JDK/library frames (sun/jdk/javax)', () => {
+    const heads = [
+      ['java.net.SocketTimeoutException: Read timed out', '\tat sun.nio.ch.NioSocketImpl.read(NioSocketImpl.java:9)'].join('\n'),
+      ['jdk.internal.misc.Unsafe.park', '\tat jdk.internal.misc.Unsafe.park(Unsafe.java:1)'].join('\n'),
+      ['javax.crypto.BadPaddingException: Given final block not properly padded', '\tat javax.crypto.Cipher.doFinal(Cipher.java:1)'].join('\n'),
+    ];
+    for (const head of heads) {
+      expect(detectModName(head)).toBeUndefined();
+    }
   });
 });
 
