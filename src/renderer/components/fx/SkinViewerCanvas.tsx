@@ -1,4 +1,4 @@
-import React, { memo, useEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Color, DirectionalLight, PCFSoftShadowMap } from 'three';
 import { SkinViewer } from 'skinview3d';
 import { installStageRig, PlayerDirector, SKIN_CONFIG, STAGE_LIGHT_CONFIG } from './PlayerDirector';
@@ -73,8 +73,20 @@ interface SkinViewerProps {
   /** Fires once on the first orbit-drag start — the "drag to rotate" hint
    *  fade-out hook. Only meaningful with interactive. */
   onOrbitStart?: () => void;
+  /**
+   * Resolution materialization seam (v2). Default 1 = the exact default
+   * behavior, byte-for-byte: this component then touches nothing. When < 1,
+   * the canvas renders at backing store = CSS size × dpr × scale while the
+   * CSS box stays full-size and image-rendering: pixelated upscales it —
+   * a genuine low-resolution 3D character (Minecraft-native pixel look).
+   * Only setSize-level operations are used (viewer.setSize → renderer +
+   * composer + FXAA uniforms in one step); the renderer is never rebuilt,
+   * and PlayerDirector, gaze, orbit and stage calibration are untouched.
+   * Authorized in docs/project-truth/19 (v2 record), same protocol as
+   * interactive/onOrbitStart: minimal, default-off, user-directed.
+   */
+  materializeScale?: number;
 }
-
 const SkinViewerCanvas: React.FC<SkinViewerProps> = ({
   skinUrl,
   model = 'default',
@@ -82,6 +94,7 @@ const SkinViewerCanvas: React.FC<SkinViewerProps> = ({
   emptyLabel = null,
   interactive = false,
   onOrbitStart,
+  materializeScale = 1,
 }) => {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -92,7 +105,42 @@ const SkinViewerCanvas: React.FC<SkinViewerProps> = ({
   // while the stage wrapper actually intersects the viewport. display:none
   // parents (keep-alive navigation) report isIntersecting: false.
   const ioVisibleRef = useRef(true);
+  // Resolution materialization seam state (see materializeScale prop doc).
+  // appliedScaleRef starts at 1 because the constructor already applied the
+  // full default size — so a default (1) prop performs no work at all.
+  const materializeScaleRef = useRef(1);
+  const appliedScaleRef = useRef(1);
   const [ready, setReady] = useState(false);
+
+  /**
+   * Apply a materialization scale with a single viewer.setSize() call —
+   * the one operation that updates renderer size (backing store = CSS × dpr ×
+   * scale), camera aspect (ratio unchanged: the scale is uniform) and the
+   * composer/FXAA uniforms together. The CSS box is then pinned back to
+   * 100%/100% so the browser upscales the small backing store with
+   * image-rendering: pixelated. Restoring scale 1 calls setSize with the
+   * wrapper's client size, which reproduces exactly what the default path
+   * sets (size, inline style) — then clears the pixelated hint.
+   */
+  const applyMaterializeScale = useCallback((scale: number) => {
+    const wrap = wrapRef.current;
+    const canvas = canvasRef.current;
+    const viewer = viewerRef.current;
+    if (!wrap || !canvas || !viewer) return;
+    const cssW = wrap.clientWidth;
+    const cssH = wrap.clientHeight;
+    if (cssW <= 0 || cssH <= 0) return;
+    if (scale >= 1) {
+      viewer.setSize(cssW, cssH);
+      canvas.style.imageRendering = '';
+      return;
+    }
+    const s = Math.max(1 / 64, Math.min(1, scale));
+    viewer.setSize(Math.max(1, Math.round(cssW * s)), Math.max(1, Math.round(cssH * s)));
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
+    canvas.style.imageRendering = 'pixelated';
+  }, []);
 
   // Init viewer once
   useEffect(() => {
@@ -195,6 +243,12 @@ const SkinViewerCanvas: React.FC<SkinViewerProps> = ({
 
     const ro = new ResizeObserver(() => {
       if (!wrapRef.current) return;
+      // During a materialization the wrapper resize must not restore the full
+      // backing store — re-apply the current scale instead (same operation).
+      if (materializeScaleRef.current < 1) {
+        applyMaterializeScale(materializeScaleRef.current);
+        return;
+      }
       viewer.width = wrapRef.current.clientWidth;
       viewer.height = wrapRef.current.clientHeight;
     });
@@ -299,6 +353,17 @@ const SkinViewerCanvas: React.FC<SkinViewerProps> = ({
     viewer.controls.addEventListener('start', onStart);
     return () => viewer.controls.removeEventListener('start', onStart);
   }, [interactive]);
+
+  // ── Resolution materialization seam (default-off) ───────────────────
+  // Mirror the prop into a ref, then apply on change. materializeScale === 1
+  // (the default) is a no-op: appliedScaleRef already starts at 1, so not a
+  // single setSize/style call is made on the default path.
+  useEffect(() => {
+    materializeScaleRef.current = materializeScale;
+    if (materializeScale === appliedScaleRef.current) return;
+    appliedScaleRef.current = materializeScale;
+    applyMaterializeScale(materializeScale);
+  }, [materializeScale, applyMaterializeScale]);
 
   // Load skin when skinUrl or model changes.
   // undefined = unresolved (stay hidden); null = confirmed no custom skin
