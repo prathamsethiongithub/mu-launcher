@@ -1680,6 +1680,16 @@ function registerIpcHandlers(): void {
   /** Absolute path of the current session's log file (shell.openPath). */
   ipcMain.handle('console-log-path', () => consoleService.currentFilePath());
 
+  /** Open a log file (or any path) in the OS default editor. */
+  ipcMain.handle('console-open-path', async (_event, target: string) => {
+    if (typeof target !== 'string' || target.length === 0) {
+      return { success: false, error: 'no path given' };
+    }
+    const openErr = await shell.openPath(target);
+    // shell.openPath resolves with '' on success or an error STRING.
+    return openErr === '' ? { success: true } : { success: false, error: openErr };
+  });
+
   /** Version/platform/java/mod-count context for copy-for-support. */
   ipcMain.handle('console-support-context', async () => {
     const activeWorld = worldManager?.getActiveWorld();

@@ -3,11 +3,15 @@ import Layout from './components/Layout';
 import PlayView from './components/PlayView';
 import WorldsView from './components/WorldsView';
 import IdentityView from './components/IdentityView';
+import ConsoleView from './components/ConsoleView';
 import { LaunchStep } from './components/ForgeLine';
 import { SetupView } from './components/SetupView';
 import DockNav from './components/DockNav';
 
-export type View = 'auth' | 'play' | 'worlds' | 'settings';
+export type View = 'auth' | 'play' | 'worlds' | 'settings' | 'console';
+
+/** Session id a console entry point asked to preload (crash-state link). */
+export type ConsoleEntryRequest = { sessionId: string | null } | null;
 
 interface WorldData {
   id: string;
@@ -68,6 +72,34 @@ function compositeMclc(buckets: Record<number, number>): number {
 function App() {
   const [currentView, setCurrentView] = useState<View>('play');
   const [appVersion, setAppVersion] = useState<string>('');
+
+  // The console: quiet entries (Ctrl+L anywhere, links on PlayView) hand a
+  // session id here; null sessionId = live session. The request object is
+  // bumped per navigation so re-opening the same session re-preloads it.
+  const [consoleRequest, setConsoleRequest] = useState<ConsoleEntryRequest>(null);
+  const [consoleRequestEpoch, setConsoleRequestEpoch] = useState(0);
+  const openConsole = useCallback((sessionId: string | null) => {
+    setConsoleRequest({ sessionId });
+    setConsoleRequestEpoch((e) => e + 1);
+    setCurrentView('console');
+  }, []);
+
+  // Ctrl+L — the global quiet entry. A renderer keydown (not globalShortcut):
+  // globalShortcut claims the combo system-wide even when Ember is not
+  // focused, which would steal a browser shortcut for no quiet benefit. The
+  // window-scoped listener is what the task permits and needs.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'l') {
+        e.preventDefault();
+        setConsoleRequest(null);
+        setConsoleRequestEpoch((v) => v + 1);
+        setCurrentView((v) => (v === 'console' ? 'play' : 'console'));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   // Launch state
   const [launching, setLaunching] = useState(false);
@@ -349,6 +381,7 @@ function App() {
           activeWorld={activeWorld}
           worlds={worlds}
           onSetActiveWorld={handleSetActiveWorld}
+          onOpenConsole={openConsole}
         />
       </div>
       <div className="h-full" style={{ display: currentView === 'worlds' ? 'block' : 'none' }}>
@@ -362,6 +395,12 @@ function App() {
       </div>
       <div className="h-full" style={{ display: currentView === 'settings' ? 'block' : 'none' }}>
         <SetupView activeWorld={activeWorld} onWorldsChanged={loadWorlds} />
+      </div>
+      <div className="h-full" style={{ display: currentView === 'console' ? 'block' : 'none' }}>
+        <ConsoleView
+          key={consoleRequestEpoch}
+          initialSessionId={consoleRequest?.sessionId ?? null}
+        />
       </div>
     </>
   );

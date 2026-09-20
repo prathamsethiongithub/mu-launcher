@@ -432,4 +432,24 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * Removes all launch step listeners.
    */
   removeLaunchListeners: () => ipcRenderer.removeAllListeners('launch-step'),
+
+  // ── The Console (read-only observation surface) ─────────────────────────
+
+  /** Snapshot: sessions list + the live session's buffered entries. */
+  consoleSnapshot: () => ipcRenderer.invoke('console-snapshot') as Promise<import('../shared/console-log').ConsoleSnapshot>,
+  /** Historical session read-back (file → entries). */
+  consoleSessionLoad: (id: string) =>
+    ipcRenderer.invoke('console-session-load', id) as Promise<{ meta: import('../shared/console-log').SessionMeta | null; entries: import('../shared/console-log').ConsoleEntry[] }>,
+  /** Absolute path of the current session's log file (null = none). */
+  consoleLogPath: () => ipcRenderer.invoke('console-log-path') as Promise<string | null>,
+  /** Open the current session's log file in the OS default editor. */
+  openPath: (path: string) => ipcRenderer.invoke('console-open-path', path) as Promise<{ success: boolean; error?: string }>,
+  /** Version/platform/java/mod-count context for copy-for-support. */
+  consoleSupportContext: () =>
+    ipcRenderer.invoke('console-support-context') as Promise<{ emberVersion: string; platform: string; javaPath: string; modCount: number }>,
+  /** Incremental console lines (batched 100ms / 64 lines in main). */
+  onConsoleLine: (callback: (payload: import('../shared/console-log').ConsoleLinePayload) => void) => {
+    ipcRenderer.on('console-line', (_event, payload) => callback(payload));
+  },
+  removeConsoleListeners: () => ipcRenderer.removeAllListeners('console-line'),
 });

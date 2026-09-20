@@ -46,6 +46,9 @@ interface PlayViewProps {
   /** Abandon an in-flight launch. Optional so the view still renders in any
    *  older composition — the affordance simply doesn't appear without it. */
   onCancelLaunch?: () => void;
+  /** Quiet entry to the console. sessionId null = live session; a crashed
+   *  session's id preloads the evidence view straight to the Oracle pin. */
+  onOpenConsole?: (sessionId: string | null) => void;
   activeWorld: WorldData | null;
   worlds: WorldData[];
   onSetActiveWorld: (id: string) => void;
@@ -126,7 +129,7 @@ function activeStageLabel(steps: LaunchStep[]): string {
 
 const PlayView: React.FC<PlayViewProps> = ({
   launching, launchError, launchSteps, isRunning, onPlay, onRetry, onCancelLaunch,
-  activeWorld, worlds, onSetActiveWorld,
+  activeWorld, worlds, onSetActiveWorld, onOpenConsole,
 }) => {
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -488,6 +491,14 @@ const PlayView: React.FC<PlayViewProps> = ({
                 Remove or disable {crashWarning.modName} in Mod Manager.
               </span>
             )}
+            {onOpenConsole && (
+              <button
+                onClick={() => onOpenConsole(null)}
+                className="text-[11px] text-faint underline-offset-2 transition-colors duration-micro hover:text-dim hover:underline"
+              >
+                console
+              </button>
+            )}
           </div>
         )}
 
@@ -539,6 +550,14 @@ const PlayView: React.FC<PlayViewProps> = ({
                   className="mt-5 cursor-pointer text-[12px] text-faint transition-colors duration-micro hover:text-dim"
                 >
                   Cancel
+                </button>
+              )}
+              {onOpenConsole && (
+                <button
+                  onClick={() => onOpenConsole(null)}
+                  className="mt-5 cursor-pointer text-[11px] text-faint transition-colors duration-micro hover:text-dim"
+                >
+                  console
                 </button>
               )}
             </>

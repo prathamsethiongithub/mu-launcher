@@ -231,6 +231,23 @@ interface ElectronAPI {
   /** Returns whether the game is currently running. */
   isGameRunning: () => Promise<boolean>;
 
+  // ── The Console (read-only observation surface) ─────────────────────────
+  /** Snapshot: sessions list + the live session's buffered entries. */
+  consoleSnapshot: () => Promise<import('./shared/console-log').ConsoleSnapshot>;
+  /** Historical session read-back (file → entries). */
+  consoleSessionLoad: (id: string) =>
+    Promise<{ meta: import('./shared/console-log').SessionMeta | null; entries: import('./shared/console-log').ConsoleEntry[] }>;
+  /** Absolute path of the current session's log file (null = none). */
+  consoleLogPath: () => Promise<string | null>;
+  /** Open a file in the OS default editor (shell.openPath). */
+  openPath: (path: string) => Promise<{ success: boolean; error?: string }>;
+  /** Version/platform/java/mod-count context for copy-for-support. */
+  consoleSupportContext: () =>
+    Promise<{ emberVersion: string; platform: string; javaPath: string; modCount: number }>;
+  /** Incremental console lines (batched 100ms / 64 lines in main). */
+  onConsoleLine: (callback: (payload: import('./shared/console-log').ConsoleLinePayload) => void) => void;
+  removeConsoleListeners: () => void;
+
   cancelLaunch: () => Promise<{ success: boolean; error?: string }>;
   onLaunchStep: (callback: (step: string, status: string, progress: number) => void) => void;
   removeLaunchListeners: () => void;
