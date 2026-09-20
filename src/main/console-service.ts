@@ -27,6 +27,8 @@ import {
   type ConsoleEntry,
   type ConsoleLevel,
   type SessionMeta,
+  type ConsoleLinePayload,
+  type ConsoleSnapshot,
   parseGameLine,
   redactTokens,
   formatPersistedLine,
@@ -37,20 +39,6 @@ import {
   sessionFileName,
   MAX_SESSION_FILES,
 } from '../shared/console-log';
-
-export interface ConsoleLinePayload {
-  sessionId: string;
-  /** Indices of new entries within the session (0-based, ordered). */
-  entries: ConsoleEntry[];
-  /** True when this flush closes the session (renderer stops auto-follow). */
-  ended?: boolean;
-  meta?: SessionMeta;
-}
-
-export interface ConsoleSnapshot {
-  sessions: SessionMeta[];
-  current: { meta: SessionMeta; entries: ConsoleEntry[] } | null;
-}
 
 const FLUSH_INTERVAL_MS = 100;
 const FLUSH_MAX_LINES = 64;

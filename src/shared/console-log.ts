@@ -258,6 +258,22 @@ export function computeTruncatedContent(lines: readonly string[]): string[] {
 
 // ── Session identity & metadata ──────────────────────────────────────────────
 
+/** Incremental broadcast payload: main → renderer (console-line IPC). */
+export interface ConsoleLinePayload {
+  sessionId: string;
+  /** New entries since the last flush (ordered). */
+  entries: ConsoleEntry[];
+  /** True when this flush closes the session (renderer stops auto-follow). */
+  ended?: boolean;
+  meta?: SessionMeta;
+}
+
+/** Full observation state: sessions list + the live session buffer. */
+export interface ConsoleSnapshot {
+  sessions: SessionMeta[];
+  current: { meta: SessionMeta; entries: ConsoleEntry[] } | null;
+}
+
 export interface SessionMeta {
   id: string;
   startedAt: number;
