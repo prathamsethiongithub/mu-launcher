@@ -202,3 +202,73 @@ B. 导入显形（900ms，每个新入库皮肤一次）
 ## 约束遵守
 
 fx/ 内部零改动（幕是容器级覆盖层，z-20 于 hero 容器内）；零新依赖；零新 CSS 变量（幕底读既有 `--ground`）；equip swell 是唯一音频且不重复触发；全部文案小写（"saved." 与 "wearing it now." 同语感）。
+
+---
+
+# Stage 1 补遗 — 像素显形 v2：分辨率显形（v1 被真机验收否决后的重设计）
+
+分支：`materialize-v2`（自 master `d96b9a3` 起）。commits：`abd630f`（test(materialize)）→ `7b7c6de`（feat(fx)）→ `eb061b2`（feat(identity)）→ 本记录。
+
+## 0. v1 否决记录（不再讨论）
+
+v1（PixelCurtain 像素幕：贴图打乱平铺→组装→扫过溶解）被用户真机验收否决，原话：
+
+> "显示的是 Minecraft 皮肤 PNG 的平面展开图，一秒后淡入 3D 角色——很烂"
+
+根本缺陷：组装完成态 = 平面贴图 atlas，对用户毫无意义——读作"屏幕上出现一张奇怪的 PNG"而非"角色从像素中诞生"。v2 铁律：**永远不显示 atlas。3D 角色本身以极低分辨率出现，分辨率逐级跳升（离散阶梯，非平滑渐变），最终全分辨率。全程显示真实角色，无中间异物。** 这更 Minecraft 原生（游戏本身即像素艺术）。
+
+v1 的代码（`PixelCurtain.tsx`、`pixel-curtain.ts` 的 scatter/grid/sweep/seed 纯函数及其 58 个测试）已全部移除，不留死代码。
+
+## 1. 结果表
+
+| 场景 | 状态 | commit | 测试数 |
+|---|---|---|---|
+| 纯逻辑（阶梯全边界/几何爬升/中位数守卫/状态机迁移） | ✓ | `abd630f` | 35 |
+| fx 接缝（SkinViewerCanvas materializeScale，默认关闭） | ✓ | `7b7c6de` | （默认路径零新调用，由既有用例钉住） |
+| equip 变形 + 导入显形双路径接线 + v1 移除 | ✓ | `eb061b2` | 全套 147（170 − 58 v1 + 35 新增） |
+
+## 2. v2 设计落地
+
+### equip 变形（总预算 ≤700ms）
+1. 按钮溶解（既有 300ms，不变）∥ 阶梯攀升并行
+2. EQUIP_SUCCESS 与 hero 重挂载（mirrorEpoch++）同批：SkinViewerCanvas 以 materializeScale=1/16 起始渲染；**previewId 指向刚装备的条目**（真实库字节）——修正 v1 遗留：v1 注释声称 "hero falls back to the worn skin" 但 previewId→null 实际渲染的是捆绑 Steve（`SkinViewerCanvas` 的 null 语义），违背"全程显示真实角色"
+3. 分辨率阶梯：1/16 → 1/12 → 1/8 → 1/6 → 1/4 → 1/3 → 1/2 → 3/4 → 1，每级 65ms（8 级 × 65 = 520ms），rAF + performance.now 驱动
+4. 到达 1：仪式清除，货架 amber 下划线（wearingHash 刷新后 scaleX 落位，攀升中段开始、基本同步落位）
+5. GREETING：remount 触发不变——波浪在攀升期间播放（"一边显形一边挥手"）
+6. 点击任意处（window capture）：立即跳到 scale=1，瞬跳终态，无二次动画
+7. 回退：prefers-reduced-motion → 无阶梯直跳全分辨率；前 200ms 帧间隔中位数 >50ms（≥3 样本）→ 弃阶梯直跳 1（样本不足→无证据不行动）
+
+### 导入显形（~900ms，双路径）
+- 起始 1/24，13 级几何爬升（公比 24^(1/12)），每级 75ms → 12 × 75 = 900ms 整
+- 文件导入与 save-current 均触发（新皮肤诞生语义与来源无关）；hero 重挂载，新皮肤首帧即 1/24
+- sha1 去重天然防重复；完成时 "saved."（首件沿用既有 "saved. first of many." + 弹性首卡，announceFirst 归属既有仪式）
+
+### 状态机
+保留 v1 的 materializing 扩展（busy → materializing → done，失败路径零变化）。两处事件面清理：`CURTAIN_END` 更名 `MATERIALIZE_END`；`SWAP_WINDOW` 删除——v2 的换肤窗口就是 EQUIP_SUCCESS 本身（首帧必须已在第一档，没有幕后换肤窗口可等待）。
+
+## 3. 时序图
+
+```
+A. equip 变形（520ms 阶梯 + 300ms 按钮溶解并行 → 总墙钟 ≤700ms 预算）
+   0    65   130   195   260   325   390   455   520ms
+   1/16→1/12→1/8 →1/6 →1/4 →1/3 →1/2 →3/4 →  1
+   按钮 "wearing it now."（busy）→ EQUIP_SUCCESS 即 materializing：
+   同批 remount hero（GREETING 波随攀升播放）+ 阶梯启动，按钮溶解并行
+   complete / 点击任意处 / fps 回退 / reduced-motion → 同一终态 scale=1
+
+B. 导入显形（900ms，文件导入与 save-current 共用）
+   0                                             825   900ms
+   1/24 ——— 13 级几何爬升（×24^(1/12)），每级 75ms ———→ 1
+   同批 remount hero：新皮肤首帧即 1/24 → 完成/跳过 → "saved."
+```
+
+## 4. fx/ 接缝授权（先例协议：用户指令 + 最小改动 + 默认关闭）
+
+`SkinViewerCanvas` 新增可选 prop `materializeScale?: number`（默认 1）。默认 1 = 既有行为字节级不变（`appliedScaleRef` 起始即 1，默认路径零新增 setSize/style 调用）。scale<1 时：`viewer.setSize(cssW×scale, cssH×scale)`（单次调用同步 renderer 尺寸 + camera 纵横比不变 + composer/FXAA uniforms）→ backing store = CSS×dpr×scale；随后 canvas CSS 钉回 100%/100%，`image-rendering: pixelated` 由浏览器最近邻放大。scale 回到 1 时 `setSize(cssW, cssH)` 精确复现默认路径的尺寸与内联样式。**renderer 永不重建；PlayerDirector、gaze、orbit、校准常量零触碰。** materialization 期间 ResizeObserver 改为重放当前 scale 而非恢复全尺寸。授权依据同 `interactive`/`onOrbitStart` 先例：用户指令、最小接缝、默认关闭。
+
+## 5. 遗留与备注
+
+1. **previewId 修正是一处行为变更**：equip 成功后 hero 现在持续预览刚装备的条目（卡片同时有 ember 预览环 + amber active 下划线 + "wearing it" 状态）。若希望装备后回落"非预览态"，需要先解决非预览态 heroUrl=null → Steve 的显示语义（见 §6）。
+2. **非预览态 hero 显示 Steve 是既有基线**（本次未动）：MS 账号佩戴自定义皮肤但未预览任何卡片时，`heroUrl = null` → 捆绑 Steve，而 chip 标着 "worn skin"。v1 之前的 equip 成功链同样落在这条路径上。修复它需要给 IdentityView 增加佩戴皮肤 dataUrl 解析（PlayView 走 PlayerIdentity 自解析，Studio 直接用 SkinViewerCanvas）——超出本任务授权范围，仅记录。
+3. `nul` 文件（Windows 保留名）仍无法被 git 追踪，`git add -A` 会因此失败——提交需显式列文件。
+4. equip 成功后装备卡的下划线落位依赖 `refreshWardrobe`（wearingHash 刷新）在攀升中段完成——与 v1 时序等价，真机若感知错位可把 underline 触发推迟到 MATERIALIZE_END（未做，属观感微调）。
