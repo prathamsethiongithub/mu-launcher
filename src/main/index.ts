@@ -19,6 +19,8 @@ import { diagnoseLastCrash } from './crash-diagnostic';
 import { checkForUpdates, performUpdate } from './update-checker';
 import { IdentityService } from './identity-service';
 import { SkinLibrary, sha1Hex, shouldWriteThroughCache, buildSkinChangedPayload } from './skin-library';
+import { ConsoleService } from './console-service';
+import type { ConsoleEntry } from '../shared/console-log';
 import type { Account, LoaderType } from '../shared/types';
 
 // ── Process-level error shielding ───────────────────────────────────────
@@ -41,6 +43,10 @@ let javaProvisioner: JavaProvisioner | null = null;
 let worldManager: WorldManager | null = null;
 let identityService: IdentityService | null = null;
 let skinLibrary: SkinLibrary | null = null;
+// The console — passive observer of the launch pipeline. Created eagerly
+// (logs dir lives under userData) and wired to the launch manager per
+// launch-game; IPC handlers below stream its snapshots to the renderer.
+const consoleService = new ConsoleService(join(app.getPath('userData'), 'logs'));
 let launchInProgress = false;
 // Skin file chosen via the main-process dialog. Uploads read this — the
 // renderer never supplies (or sees) a filesystem path.
@@ -742,6 +748,33 @@ function registerIpcHandlers(): void {
     };
     launchManager.onStepChange(onStep);
 
+    // THE CONSOLE (passive observer): mirror every launch-step into the
+    // session, tap MCLC data/debug/arguments/close, and attribute a crash
+    // via the Oracle when the game exits nonzero. Nothing here can slow
+    // the launch down: every capture is an O(1) append + a batched flush.
+    consoleService.beginSession();
+    consoleService.setBroadcast((payload) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('console-line', payload);
+      }
+    });
+    launchManager.attachConsole(consoleService, (code) => {
+      if (code === 0) return;
+      // Crash attribution — same source the Oracle banner uses. Never
+      // throws; a failed diagnosis leaves the session as a plain crash.
+      const activeWorld = worldManager?.getActiveWorld();
+      if (!activeWorld) return;
+      void diagnoseLastCrash(worldManager!.resolveRoot(activeWorld))
+        .then((d) => {
+          if (d.crashed) consoleService.attachOracle({ modName: d.modName, reason: d.reason });
+        })
+        .catch(() => { /* attribution is best-effort */ });
+    });
+    const consoleStepTap: StepChangeCallback = (step, status, progress) => {
+      consoleService.addLauncherLine(step, status, progress);
+    };
+    launchManager.onStepChange(consoleStepTap);
+
     try {
       // Memory: the active world's own allocation (Setup → Memory), not a
       // hardcoded default. Falls back to 4096 only if the registry value is
@@ -761,6 +794,7 @@ function registerIpcHandlers(): void {
     } catch (error) {
       console.error('[ipc-launch-error]', error);
       const message = error instanceof Error ? error.message : 'Launch failed';
+      consoleService.failSession(message);
       return { success: false, error: message };
     } finally {
       launchInProgress = false;
@@ -1623,9 +1657,51 @@ function registerIpcHandlers(): void {
   ipcMain.handle('cancel-launch', async () => {
     if (launchManager) {
       await launchManager.cancelLaunch();
+      consoleService.cancelSession();
       return { success: true };
     }
     return { success: false, error: '[E603] No active launch to cancel.' };
+  });
+
+  // ── THE CONSOLE — read-only IPC surface ─────────────────────────────────
+  // The renderer can observe sessions; it can never write to them.
+
+  /** Snapshot: sessions list + the live session's buffered entries. */
+  ipcMain.handle('console-snapshot', () => consoleService.snapshot());
+
+  /** Historical session read-back (file → entries). */
+  ipcMain.handle('console-session-load', (_event, id: string) => {
+    if (typeof id !== 'string' || !/^session-[\w-]+$/.test(id)) {
+      return { meta: null, entries: [] as ConsoleEntry[] };
+    }
+    return consoleService.loadSession(id);
+  });
+
+  /** Absolute path of the current session's log file (shell.openPath). */
+  ipcMain.handle('console-log-path', () => consoleService.currentFilePath());
+
+  /** Version/platform/java/mod-count context for copy-for-support. */
+  ipcMain.handle('console-support-context', async () => {
+    const activeWorld = worldManager?.getActiveWorld();
+    let modCount = 0;
+    let javaPath = 'java';
+    if (activeWorld) {
+      try {
+        const mods = await listMods(worldManager!.resolveRoot(activeWorld));
+        modCount = mods.length;
+      } catch { /* count stays 0 */ }
+    }
+    try {
+      // getJavaPath() returns the provisioned path (null = never provisioned
+      // — the launch would then have failed before a session mattered).
+      javaPath = javaProvisioner?.getJavaPath() ?? 'java';
+    } catch { javaPath = 'java'; }
+    return {
+      emberVersion: app.getVersion(),
+      platform: process.platform,
+      javaPath,
+      modCount,
+    };
   });
 
   /**
@@ -1725,6 +1801,9 @@ app.whenReady().then(() => {
 
   // The skin library (Identity Studio) — registry + PNG files under userData.
   skinLibrary = new SkinLibrary(app.getPath('userData'));
+
+  // Console log rotation at startup: keep the newest 10 session files.
+  consoleService.rotate();
 
   // ── Startup Session Reconciliation ─────────────────────────────────
   // If AuthService has a valid session but IdentityService lacks tokens

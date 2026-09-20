@@ -9,6 +9,19 @@ import { ModInstaller } from './mod-installer';
 
 export type StepChangeCallback = (step: string, status: string, progress: number) => void;
 
+/**
+ * Console capture surface. The console is a passive observer: it never
+ * influences the launch, it only receives MCLC events through this
+ * interface. Optional — with no observer attached, LaunchManager behaves
+ * exactly as it did before the console existed.
+ */
+export interface ConsoleObserver {
+  addGameLine(raw: string): void;
+  addLauncherDebug(text: string): void;
+  recordLaunchCommand(argv: string[]): void;
+  endSession(code: number): void;
+}
+
 const STALL_TIMEOUT_MS = 180_000; // 3 minutes without any MCLC activity = stall
 
 export class LaunchManager {
@@ -329,6 +342,31 @@ export class LaunchManager {
 
   onStepChange(callback: StepChangeCallback): void {
     this._onStepChange = callback;
+  }
+
+  /**
+   * Attach the console observer (MCLC 'data'/'debug'/'arguments'/'close'
+   * taps). Pure subscription — the launch pipeline's own handlers, timing
+   * and error semantics are untouched. `onGameClose` fires with the exit
+   * code after the session ends, so the caller can run crash attribution
+   * (Oracle) without this module knowing about crash reports.
+   */
+  attachConsole(observer: ConsoleObserver, onGameClose?: (code: number) => void): void {
+    this.client.on('arguments', (argv: string[]) => {
+      try { observer.recordLaunchCommand(argv); } catch { /* observer must never break the launch */ }
+    });
+    this.client.on('data', (e: string) => {
+      try { observer.addGameLine(e); } catch { /* ignore */ }
+    });
+    this.client.on('debug', (e: string) => {
+      try { observer.addLauncherDebug(e); } catch { /* ignore */ }
+    });
+    this.client.on('close', (code: number) => {
+      try { observer.endSession(code); } catch { /* ignore */ }
+      if (onGameClose) {
+        try { onGameClose(code); } catch { /* ignore */ }
+      }
+    });
   }
 
   async cancelLaunch(): Promise<void> {
