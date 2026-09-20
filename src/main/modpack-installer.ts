@@ -39,10 +39,19 @@ import { mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
-import { downloadGuard, readWithStallGuard } from './net';
+import { downloadGuard, readWithStallGuard, pMap } from './net';
 
 /** Modrinth asks clients to identify themselves; bare/absent UAs get throttled. */
 const USER_AGENT = 'mu-master-launcher/1.0.0 (github.com/prathamsethiongithub/mu-launcher)';
+
+/**
+ * Parallel files[] downloads. Each item is fully self-contained (own URL
+ * candidates, tmp file, hash gate, final path), Modrinth's CDN is built for
+ * concurrent pulls, and failures are already per-item — so bounded
+ * parallelism changes nothing observable except wall-clock. 6 balances
+ * throughput against CDN politeness and local disk contention.
+ */
+const PACK_FILE_CONCURRENCY = 6;
 
 /**
  * One entry of modrinth.index.json's `files[]`. Only the fields the download
@@ -325,8 +334,12 @@ async function downloadPackFile(item: MrpackFile, worldRootPath: string): Promis
 /**
  * Download every entry of modrinth.index.json's `files[]` into the world
  * root. Items with env.client === "unsupported" are skipped (client-irrelevant
- * files such as server-side-only jars). All remaining items download
- * sequentially; each is hash-verified before its atomic rename.
+ * files such as server-side-only jars). Downloads run bounded-parallel at
+ * PACK_FILE_CONCURRENCY; each item is hash-verified before its atomic
+ * rename. Every item owns its own URL candidates, tmp file, hash gate, and
+ * final path — nothing is shared between items, so completion order cannot
+ * affect the on-disk result, and a failed item never poisons a successful
+ * one.
  *
  * Never throws. Returns the aggregate so the caller can surface an honest
  * partial-success message instead of pretending the pack is complete.
@@ -351,26 +364,40 @@ export async function installModpackFiles(
   let failed = 0;
   const errors: string[] = [];
 
-  for (const item of items) {
-    if (item?.env?.client === 'unsupported') {
-      skipped++;
-      continue;
-    }
-    if (!item || typeof item.path !== 'string') {
-      failed++;
-      errors.push('[E702] A files[] entry is missing its "path" field.');
-      continue;
-    }
-    try {
-      await mkdir(dirname(join(worldRootPath, ...item.path.replace(/\\/g, '/').split('/').filter(Boolean))), { recursive: true });
-      await downloadPackFile(item, worldRootPath);
-      installed++;
-    } catch (err) {
-      failed++;
-      errors.push((err as Error).message);
-      console.error('[modpack] files[] item failed:', (err as Error).message);
-    }
-  }
+  // Bounded-parallel downloads (PACK_FILE_CONCURRENCY). Each item's guards
+  // and error paths are self-contained (see downloadPackFile): per-item URL
+  // candidates tried in order, per-item tmp+rename atomicity, per-item E-code
+  // errors carrying the item path. downloadPackFile never throws for a
+  // VALID item shape, so the mapper below never rejects; malformed entries
+  // (missing path) are counted exactly as the serial loop did. Counters are
+  // plain JS numbers mutated from a single thread — no races.
+  await pMap(
+    items,
+    async (item) => {
+      if (item?.env?.client === 'unsupported') {
+        skipped++;
+        return;
+      }
+      if (!item || typeof item.path !== 'string') {
+        failed++;
+        errors.push('[E702] A files[] entry is missing its "path" field.');
+        return;
+      }
+      try {
+        await mkdir(
+          dirname(join(worldRootPath, ...item.path.replace(/\\/g, '/').split('/').filter(Boolean))),
+          { recursive: true },
+        );
+        await downloadPackFile(item, worldRootPath);
+        installed++;
+      } catch (err) {
+        failed++;
+        errors.push((err as Error).message);
+        console.error('[modpack] files[] item failed:', (err as Error).message);
+      }
+    },
+    { concurrency: PACK_FILE_CONCURRENCY },
+  );
 
   return { installed, skipped, failed, errors };
 }
