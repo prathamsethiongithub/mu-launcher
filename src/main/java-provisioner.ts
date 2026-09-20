@@ -11,7 +11,7 @@ import {
 import { spawn } from 'child_process';
 import { createHash } from 'crypto';
 import { EventEmitter } from 'events';
-import { timedFetch, downloadGuard, readWithStallGuard } from './net';
+import { timedFetch, downloadGuard, readWithStallGuard, pMap } from './net';
 
 interface JavaVersionInfo {
   component: string;
@@ -61,6 +61,15 @@ export interface JavaProgressEvent {
   percent: number;
   message?: string;
 }
+
+/**
+ * Parallel JRE file downloads. The per-file work is independent (each file has
+ * its own URL + SHA-1 from the manifest), Mojang's CDN happily serves many
+ * connections, and nothing here shares mutable state — so bounded parallelism
+ * is pure wall-clock win. 6 keeps us a polite citizen and comfortably ahead
+ * of the previous serial loop; every other behavior is unchanged.
+ */
+const JAVA_DOWNLOAD_CONCURRENCY = 6;
 
 export class JavaProvisioner extends EventEmitter {
   private mcVersion: string = '26.1.2';
@@ -259,34 +268,44 @@ export class JavaProvisioner extends EventEmitter {
     const totalFiles = fileEntries.length;
     let completedFiles = 0;
 
-    for (const [relativePath, fileInfo] of fileEntries) {
-      const destPath = join(jreDir, relativePath);
-      const destDir = dirname(destPath);
-      mkdirSync(destDir, { recursive: true });
+    // Bounded-parallel downloads (JAVA_DOWNLOAD_CONCURRENCY). Order-independence:
+    // each entry owns its destPath, its own sha1 gate inside downloadFile, and
+    // its own partial-file cleanup — no entry depends on any other. First
+    // failure still aborts the whole provisioning with [E213], exactly like
+    // the old serial loop; already-downloaded files stay (downloadFile only
+    // unlinks its own failed target), identical to before.
+    await pMap(
+      fileEntries,
+      async ([relativePath, fileInfo]) => {
+        const destPath = join(jreDir, relativePath);
+        const destDir = dirname(destPath);
+        mkdirSync(destDir, { recursive: true });
 
-      // Prefer raw (uncompressed) download for simplicity
-      const download =
-        (fileInfo as FileManifestEntry).downloads!.raw ||
-        (fileInfo as FileManifestEntry).downloads!.lzma;
+        // Prefer raw (uncompressed) download for simplicity
+        const download =
+          (fileInfo as FileManifestEntry).downloads!.raw ||
+          (fileInfo as FileManifestEntry).downloads!.lzma;
 
-      if (!download) {
-        // Skip entries with no usable download URL
-        continue;
-      }
+        if (!download) {
+          // Skip entries with no usable download URL
+          return;
+        }
 
-      try {
-        await this.downloadFile(download.url, destPath, download.sha1);
-      } catch (err) {
-        throw new Error(
-          '[E213] Failed to download a Java runtime file. Please check your internet connection and try again.'
-        );
-      }
+        try {
+          await this.downloadFile(download.url, destPath, download.sha1);
+        } catch (err) {
+          throw new Error(
+            '[E213] Failed to download a Java runtime file. Please check your internet connection and try again.'
+          );
+        }
 
-      completedFiles++;
-      // Progress: 25% -> 90% (65 percentage points for downloads)
-      const pct = 25 + Math.floor((completedFiles / totalFiles) * 65);
-      this.emitProgress('downloading-jre', pct, `Downloading ${relativePath}`);
-    }
+        completedFiles++;
+        // Progress: 25% -> 90% (65 percentage points for downloads)
+        const pct = 25 + Math.floor((completedFiles / totalFiles) * 65);
+        this.emitProgress('downloading-jre', pct, `Downloading ${relativePath}`);
+      },
+      { concurrency: JAVA_DOWNLOAD_CONCURRENCY },
+    );
 
     // ── 10. Locate the java executable ──────────────────────────────
     this.emitProgress('locating-java', 92, 'Locating java executable');
