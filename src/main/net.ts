@@ -95,3 +95,56 @@ export async function readWithStallGuard<T>(
     clearTimeout(timer);
   }
 }
+
+/**
+ * Bounded-concurrency map over a list, preserving order. Hand-rolled (zero
+ * new dependencies) to parallelize the download phases (Java provisioning,
+ * .mrpack files[]) without changing their failure contracts.
+ *
+ * Semantics:
+ *  - Results keep the input's index order even when tasks settle out of order.
+ *  - At most `concurrency` tasks are in flight at any moment (clamped to >= 1);
+ *    remaining items queue and are pulled as workers free up.
+ *  - The first error to ARRIVE rejects the whole map. In-flight tasks are left
+ *    to settle on their own — every worker promise is subscribed by the single
+ *    Promise.all below, so a late rejection can never surface as an
+ *    unhandledRejection. After a failure no NEW tasks are pulled.
+ */
+export async function pMap<T, R>(
+  items: readonly T[],
+  mapper: (item: T, index: number) => Promise<R>,
+  options: { concurrency: number },
+): Promise<R[]> {
+  const concurrency = Math.max(1, Math.floor(options.concurrency) || 1);
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  let settled = false;
+
+  const runWorker = async (): Promise<void> => {
+    while (!settled) {
+      const index = nextIndex++;
+      if (index >= items.length) return;
+      results[index] = await mapper(items[index], index);
+    }
+  };
+
+  // One promise per slot: exactly min(concurrency, items.length) tasks can be
+  // in flight — never more (ceiling), never fewer (not serial when there is
+  // queued work). Each worker's rejection flips `settled` BEFORE reaching
+  // Promise.all, so the moment one task fails the other slots stop pulling
+  // new items; in-flight mappers still settle on their own, and every worker
+  // promise is subscribed below, so no late rejection can ever be unhandled.
+  const workerCount = Math.min(concurrency, items.length);
+  const workers: Promise<void>[] = [];
+  for (let i = 0; i < workerCount; i++) {
+    workers.push(
+      runWorker().catch((err: unknown) => {
+        settled = true;
+        throw err;
+      }),
+    );
+  }
+
+  await Promise.all(workers);
+  return results;
+}
