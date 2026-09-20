@@ -22,6 +22,7 @@ import {
   type CeremonyPhase,
   type MaterializeVariant,
 } from '../../shared/materialize';
+import { resolveWornSkin } from '../../shared/worn-skin';
 
 /**
  * Identity Studio — the player's private skin wardrobe.
@@ -123,6 +124,10 @@ const IdentityView: React.FC = () => {
   const [skins, setSkins] = useState<SkinEntry[]>([]);
   const [skinsLoading, setSkinsLoading] = useState(true);
   const [wearingHash, setWearingHash] = useState<string | null>(null);
+  /** The account's worn texture, resolved cache-first through 'get-identity-skin'. */
+  const [wornSkin, setWornSkin] = useState<{ dataUrl: string; model: 'classic' | 'slim' } | null>(null);
+  /** False until the current account's worn-texture resolve has settled. */
+  const [wornSkinReady, setWornSkinReady] = useState(false);
   /** Which entry the hero is previewing; null = the account's own skin. */
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [equip, setEquip] = useState<{ id: string; phase: CeremonyPhase; msg: string } | null>(null);
@@ -198,6 +203,30 @@ const IdentityView: React.FC = () => {
     }
   }, []);
 
+  // The worn TEXTURE — read through the existing 'get-identity-skin' channel
+  // (identity-service → skin-service, 24h cache). No new IPC: the channel
+  // existed, the Studio just never consumed it (the §5.2 gap). Must run AFTER
+  // loadWearingHash (see loadWornState): the hash's force-fetch writes
+  // through to the cache, so this cache-first read returns exactly the bytes
+  // the hash names.
+  const loadWornSkin = useCallback(async (accountId: string | null) => {
+    if (!accountId) { setWornSkin(null); setWornSkinReady(true); return; }
+    try {
+      const profile = await window.electronAPI.getIdentitySkin(accountId);
+      setWornSkin(profile?.skinUrl ? { dataUrl: profile.skinUrl, model: profile.model } : null);
+    } catch {
+      setWornSkin(null);
+    } finally {
+      setWornSkinReady(true);
+    }
+  }, []);
+
+  /** hash first (force-fetch writes through), then the cache-first texture read. */
+  const loadWornState = useCallback(async (accountId: string | null) => {
+    await loadWearingHash(accountId);
+    await loadWornSkin(accountId);
+  }, [loadWearingHash, loadWornSkin]);
+
   useEffect(() => { loadAccounts(); }, [loadAccounts]);
 
   useEffect(() => {
@@ -211,9 +240,13 @@ const IdentityView: React.FC = () => {
     setPreviewId(null);
     setEquip(null);
     setDuplicateMsg(null);
+    // Stale wearing/texture state would flash the previous account's skin.
+    setWearingHash(null);
+    setWornSkin(null);
+    setWornSkinReady(false);
     loadSkins();
-    loadWearingHash(activeAccountId);
-  }, [activeAccountId, loadSkins, loadWearingHash]);
+    loadWornState(activeAccountId);
+  }, [activeAccountId, loadSkins, loadWornState]);
 
   // Drag-rotate hint: shown once per machine, gone after the first drag.
   useEffect(() => {
@@ -301,7 +334,7 @@ const IdentityView: React.FC = () => {
       const result = await window.electronAPI.signOutAccount(accountId);
       if (!result.success) setError(result.error || 'Sign-out failed.');
       await loadAccounts();
-      await loadWearingHash(activeAccountId);
+      await loadWornState(activeAccountId);
     } finally {
       setActionLoading(null);
     }
@@ -314,7 +347,7 @@ const IdentityView: React.FC = () => {
       const result = await window.electronAPI.removeAccount(accountId);
       if (!result.success) setError(result.error || 'Failed to remove account.');
       await loadAccounts();
-      await loadWearingHash(activeAccountId);
+      await loadWornState(activeAccountId);
     } catch {
       setError('Failed to remove account. Please try again.');
     } finally {
@@ -327,7 +360,7 @@ const IdentityView: React.FC = () => {
     const list = await loadSkins();
     await loadWearingHash(activeAccountId);
     return list;
-  }, [loadSkins, loadWearingHash, activeAccountId]);
+  }, [loadSkins, loadWornState, activeAccountId]);
 
   const handleAddSkin = async () => {
     setDuplicateMsg(null);
@@ -574,18 +607,31 @@ const IdentityView: React.FC = () => {
   // ── hero state derivation ─────────────────────────────────────────────
   // Tri-state per the handbook: undefined = resolving (render nothing),
   // null = confirmed no custom skin (bundled Steve), string = the skin.
+  // Non-preview: the hero shows the skin the account is ACTUALLY wearing —
+  // the §5.2 mirror fix (it used to fall to bundled Steve while the chip
+  // claimed "worn skin"). Preview keeps its byte-exact card behavior.
+  const heroResolving =
+    skinsLoading || loading || (isMsActive && !isSignedOut && (wearingHash === null || !wornSkinReady));
+  const worn = resolveWornSkin({
+    resolving: heroResolving,
+    wearingHash,
+    wornDataUrl: wornSkin?.dataUrl ?? null,
+    wornModel: wornSkin?.model ?? null,
+    skins,
+  });
   const heroUrl: string | null | undefined = previewed
     ? previewed.dataUrl // null (missing file) is a confirmed state the card explains
-    : skinsLoading || loading || (isMsActive && !isSignedOut && wearingHash === null && !isOfflineActive)
-      ? undefined
-      : null;
+    : worn.url;
   const heroModel: 'slim' | 'default' = toViewerModel(
-    previewed ? previewed.model : 'classic',
+    previewed ? previewed.model : worn.model ?? 'classic',
   );
   const heroName = previewed ? previewed.name : activeAccount?.username ?? '—';
+  // "worn skin" only when the hero really shows the worn texture (§5.2
+  // honesty): confirmed-no-skin says 'default', the resolve window keeps the
+  // pre-existing 'worn skin'.
   const heroChip = previewed
     ? previewed.model
-    : isOfflineActive
+    : isOfflineActive || worn.url === null
       ? 'default'
       : 'worn skin';
   const heroActive = previewed ? previewed.hash === wearingHash : true;
@@ -745,6 +791,17 @@ const IdentityView: React.FC = () => {
           </p>
         )}
 
+        {/* §5.2 mirror — the worn texture came from outside the library.
+            Save-current (the existing path) is the only entry; no new logic. */}
+        {!previewed && worn.fromOutsideEmber && canWearCustom && (
+          <>
+            <p className="mt-3 text-[12px] text-dim">wearing a skin from outside ember</p>
+            <button onClick={handleSaveCurrent} className="pill-ember mt-3 !px-5 !py-2.5 !text-[12px]">
+              save it to your library
+            </button>
+          </>
+        )}
+
         {/* equip — the ceremony. The one amber BLOCK on this screen; the
             gaze layer needs no code: it already tracks the cursor, so
             hovering the button IS the gaze shift, and leaving returns it. */}
@@ -816,7 +873,7 @@ const IdentityView: React.FC = () => {
           </div>
         )}
 
-        {!previewed && libraryEmpty && canWearCustom && (
+        {!previewed && libraryEmpty && canWearCustom && !worn.fromOutsideEmber && ( // outside-ember shows its own save pill above
           <button onClick={handleSaveCurrent} className="pill-ember mt-3 !px-5 !py-2.5 !text-[12px]">
             save this skin to your library
           </button>

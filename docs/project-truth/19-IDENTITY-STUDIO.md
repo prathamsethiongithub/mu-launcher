@@ -269,6 +269,33 @@ B. 导入显形（900ms，文件导入与 save-current 共用）
 ## 5. 遗留与备注
 
 1. **previewId 修正是一处行为变更**：equip 成功后 hero 现在持续预览刚装备的条目（卡片同时有 ember 预览环 + amber active 下划线 + "wearing it" 状态）。若希望装备后回落"非预览态"，需要先解决非预览态 heroUrl=null → Steve 的显示语义（见 §6）。
-2. **非预览态 hero 显示 Steve 是既有基线**（本次未动）：MS 账号佩戴自定义皮肤但未预览任何卡片时，`heroUrl = null` → 捆绑 Steve，而 chip 标着 "worn skin"。v1 之前的 equip 成功链同样落在这条路径上。修复它需要给 IdentityView 增加佩戴皮肤 dataUrl 解析（PlayView 走 PlayerIdentity 自解析，Studio 直接用 SkinViewerCanvas）——超出本任务授权范围，仅记录。
+2. **~~非预览态 hero 显示 Steve~~ 已修复（2026-09-20，见 §6）**：MS 账号佩戴自定义皮肤但未预览任何卡片时，`heroUrl = null` → 捆绑 Steve，而 chip 标着 "worn skin"。v1 之前的 equip 成功链同样落在这条路径上。已通过给 IdentityView 增加佩戴皮肤 dataUrl 解析修复（复用既有 `get-identity-skin` 通道，零新增 IPC）。
 3. `nul` 文件（Windows 保留名）仍无法被 git 追踪，`git add -A` 会因此失败——提交需显式列文件。
 4. equip 成功后装备卡的下划线落位依赖 `refreshWardrobe`（wearingHash 刷新）在攀升中段完成——与 v1 时序等价，真机若感知错位可把 underline 触发推迟到 MATERIALIZE_END（未做，属观感微调）。
+
+## 6. 镜像修复：非预览态 hero 显示真实佩戴皮肤（2026-09-20，mirror-fix）
+
+### 根因（修复前行号）
+
+`IdentityView.tsx:577-581`（旧）：非预览态 `heroUrl` 仅在 `skinsLoading || loading || wearingHash === null` 时为 `undefined`，解析完成即落 **null** → `SkinViewerCanvas` 的三态语义（null = 确认无自定义皮肤）渲染捆绑 Steve。而同一时刻：wearingHash 已解析（shelf 的 amber 下划线由它驱动）、chip 仍显示 "worn skin"——**同一屏幕自相矛盾**。
+
+数据路径本已存在但从未被 Studio 消费：`get-identity-skin` IPC（main `index.ts:1386` → `identity-service.getSkin` → `skin-service.getSkin`，Mojang → Crafatar 回落，24h 磁盘缓存）在 preload `index.ts:362` 暴露为 `getIdentitySkin(accountId)`，返回含 `skinUrl`（data URL）与 `model` 的完整 `SkinProfile`。**零新增通道。**
+
+### 修复机制
+
+1. **纯逻辑** `src/shared/worn-skin.ts`：`resolveWornSkin()` 四优先级——resolving → `undefined`（不闪 Steve，手册 trap #2 三态不变）；无佩戴纹理 → `null`（诚实 Steve）；佩戴 hash 命中库条目 → 该条目 dataUrl（hash 是字节级锚点，纹理与下划线天然一致）；未命中 → 真实佩戴纹理 + `fromOutsideEmber`。
+2. **顺序保证**：`loadWornState` = 先 `loadWearingHash`（force 抓取把当下字节**写透**进缓存）再 `loadWornSkin`（cache-first 读回）——同一 cache 键上 hash 与纹理字节不可能错位；equip 后写透（a3296e8）同理使装备皮肤立即正确显示。
+3. **outside-ember 镜像**：佩戴皮肤不在库中时，hero 下方显示 "wearing a skin from outside ember" + "save it to your library"（复用既有 `skins-save-current` 路径；与 libraryEmpty 的 save 入口互斥，不双出）。
+4. **chip 语义诚实化**（既定行为变更）：非预览态确认无自定义皮肤 → `default`（旧行为恒显 "worn skin"）；解析窗口期保持 "worn skin" 不变。
+5. **失效边界补齐**：账号切换 effect 现在显式清空 wearingHash/wornSkin/wornSkinReady（防上一账号皮肤闪现）；sign-out / remove-account / refreshWardrobe 全部走 `loadWornState`。
+
+### 不变量（逐点保持）
+
+- 预览态零变化：`heroUrl = previewed.dataUrl`、equip 仪式、显形阶梯、镜像时刻全部未触碰。
+- 皮肤三态语义、fx/、CSS 变量、既有 IPC 载荷零改动。
+- 冷启动走 skin-service 既有缓存/网络路径，与其他视图一致。
+
+### 验证
+
+- `tests/worn-skin.test.ts`：7 用例（三态、命中、缺文件条目、outside-ember、无 hash、空库）。
+- 全量门禁：typecheck 0 错误 · build 成功 · **176/176**（基线 169 只增不减）。
