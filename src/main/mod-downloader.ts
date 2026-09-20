@@ -16,7 +16,8 @@
  * resolves to `{ success: false, error: <message> }`.
  */
 
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rename, rm } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
 import { join } from 'node:path';
 
 /** Modrinth asks clients to identify themselves; bare/absent UAs get throttled. */
@@ -205,19 +206,78 @@ export async function downloadModFromModrinth(
     }
     assertSafeFilename(file.filename);
 
-    // ── 4. download the file itself ──
+    // ── 4. download the file itself (streamed — never buffered whole) ──
     const fileRes = await fetch(file.url, { headers: { 'User-Agent': USER_AGENT } });
     if (!fileRes.ok) {
       throw new Error(
         `Download failed: HTTP ${fileRes.status} from ${file.url} (file "${file.filename}").`,
       );
     }
-    const bytes = Buffer.from(await fileRes.arrayBuffer());
+    const reader = fileRes.body?.getReader();
+    if (!reader) {
+      throw new Error(
+        `Download failed: empty response body from ${file.url} (file "${file.filename}").`,
+      );
+    }
 
-    // ── 5. write into the world's mods/ directory ──
+    // ── 5. stream into a .tmp sibling, then atomically rename ──
+    // The old path buffered the entire response via arrayBuffer() before
+    // writing — peak memory equal to the full jar size. Streaming caps it at
+    // one chunk. Writing to `<name>.jar.tmp` first and renaming after a clean
+    // finish means a crash mid-download can never leave a truncated file
+    // masquerading as a complete mod: mods/ only ever sees fully-written
+    // jars, and a failed download leaves any previous jar at the destination
+    // untouched. (This path never hash-verified payloads, so there is no
+    // verification contract to preserve here; adding one would be a
+    // functional change and is out of scope.)
     const modsDir = join(worldRootPath, 'mods');
     await mkdir(modsDir, { recursive: true });
-    await writeFile(join(modsDir, file.filename), bytes);
+    const dest = join(modsDir, file.filename);
+    const tmp = `${dest}.tmp`;
+
+    const writer = createWriteStream(tmp);
+    const finished = new Promise<void>((resolve, reject) => {
+      writer.on('finish', resolve);
+      writer.on('error', reject);
+    });
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!writer.write(value)) {
+          // Respect backpressure: pause reads until the file stream drains.
+          await new Promise<void>((resolve) => writer.once('drain', resolve));
+        }
+      }
+      writer.end();
+      await finished;
+    } catch (err) {
+      // Close the fd BEFORE unlinking: destroy() is async, and on Windows a
+      // directory entry only disappears (and unlink only reliably succeeds)
+      // once the handle is released. 'close' fires after the fd is released,
+      // on both normal and errored closes.
+      await new Promise<void>((resolve) => {
+        if (writer.destroyed) {
+          resolve();
+          return;
+        }
+        writer.once('close', () => resolve());
+        writer.destroy();
+      });
+      await rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
+
+    // Atomic swap into place. An existing jar at dest (re-import) is
+    // replaced — same rm-then-rename sequence as mod-installer and
+    // modpack-installer (Windows rename fails while dest exists).
+    await rm(dest, { force: true }).catch(() => {});
+    try {
+      await rename(tmp, dest);
+    } catch (err) {
+      await rm(tmp, { force: true }).catch(() => {});
+      throw err;
+    }
 
     return { success: true, filename: file.filename };
   } catch (err) {
