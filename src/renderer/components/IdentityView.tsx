@@ -8,15 +8,20 @@ import {
   hasReturnedAfterAbsence,
   isFirstSkin,
 } from '../../shared/studio-ritual';
-import { PixelCurtain } from './PixelCurtain';
 import {
   equipButtonPhase,
   equipCeremonyNext,
-  hashSeed,
+  resolutionLadder,
+  shouldSkipMaterialize,
+  EQUIP_LADDER,
+  EQUIP_MATERIALIZE_BUDGET,
+  IMPORT_LADDER,
+  IMPORT_MATERIALIZE_BUDGET,
+  SKIP_SAMPLE_WINDOW_MS,
   type CeremonyEvent,
   type CeremonyPhase,
-  type PixelCurtainVariant,
-} from '../../shared/pixel-curtain';
+  type MaterializeVariant,
+} from '../../shared/materialize';
 
 /**
  * Identity Studio — the player's private skin wardrobe.
@@ -54,11 +59,9 @@ interface SkinEntry {
   dataUrl: string | null;
 }
 
-/** The active pixel-materialization overlay; null = no curtain mounted. */
-interface CurtainSpec {
-  variant: PixelCurtainVariant;
-  dataUrl: string;
-  seed: number;
+/** An active resolution materialization; null = the hero is at full scale. */
+interface MaterializeSpec {
+  variant: MaterializeVariant;
   skinId: string;
   /** import only: this birth was the wardrobe's first skin (existing ritual owns the message). */
   announceFirst: boolean;
@@ -135,8 +138,15 @@ const IdentityView: React.FC = () => {
   const [firstInId, setFirstInId] = useState<string | null>(null);
   /** The 200 ms red flash on failure. */
   const [failFlash, setFailFlash] = useState(false);
-  /** Pixel materialization overlay (equip morph curtain / import reveal). */
-  const [curtain, setCurtain] = useState<CurtainSpec | null>(null);
+  /** Resolution materialization (equip morph ladder / import reveal ladder).
+   *  v2: the character itself starts at a low resolution and climbs — the v1
+   *  texture-atlas curtain was rejected in user acceptance. */
+  const [materialize, setMaterialize] = useState<MaterializeSpec | null>(null);
+  /** The hero's current ladder rung; 1 = full resolution. */
+  const [materializeScale, setMaterializeScale] = useState(1);
+  /** Latest spec, readable synchronously inside event handlers. */
+  const materializeRef = useRef<MaterializeSpec | null>(null);
+  materializeRef.current = materialize;
   /** Pleasure sensor: actions recorded this visit, classified on unmount. */
   const sensorActionsRef = useRef<string[]>([]);
 
@@ -343,7 +353,7 @@ const IdentityView: React.FC = () => {
     if (result.skin) {
       setDuplicateMsg(null);
       announceIfFirstSkin(beforeCount, result.skin);
-      const revealing = startImportReveal(list, result.skin.id, beforeCount);
+      const revealing = startImportMaterialize(list, result.skin.id, beforeCount);
       if (!revealing) setPreviewId(result.skin.id); // no texture → no ceremony
     }
   };
@@ -362,7 +372,7 @@ const IdentityView: React.FC = () => {
     if (result.duplicate && result.message) setDuplicateMsg(result.message);
     if (result.skin) {
       announceIfFirstSkin(beforeCount, result.skin);
-      const revealing = startImportReveal(list, result.skin.id, beforeCount);
+      const revealing = startImportMaterialize(list, result.skin.id, beforeCount);
       if (!revealing) setPreviewId(result.skin.id); // no texture → no ceremony
     }
   };
@@ -379,59 +389,123 @@ const IdentityView: React.FC = () => {
     requestAnimationFrame(() => requestAnimationFrame(() => setFirstInId(null)));
   };
 
-  // ── pixel materialization (equip morph curtain + import reveal) ───────
+  // ── resolution materialization (equip morph + import reveal) ──────────
+  // v2 (after v1's pixel curtain was rejected in acceptance): the character
+  // ITSELF materializes — SkinViewerCanvas renders at a discrete low
+  // resolution and climbs rung by rung to full. The atlas is never shown.
+
   /** All ceremony transitions pass through the pure machine. */
-  const dispatchCeremony = (event: CeremonyEvent) =>
+  const dispatchCeremony = useCallback((event: CeremonyEvent) => {
     setEquip((cur) => {
       if (!cur) return cur;
       const next = equipCeremonyNext(cur.phase, event);
       return next === 'done' ? null : { ...cur, phase: next };
     });
+  }, []);
 
-  /** Settle any in-flight curtain to its end state — never two layers. */
-  const finalizeActiveCurtain = () => {
-    if (!curtain) return;
-    if (curtain.variant === 'import' && !curtain.announceFirst) setFirstSkinMsg('saved.');
-    setCurtain(null);
-    dispatchCeremony({ type: 'CURTAIN_END' });
-  };
+  /** Settle any in-flight materialization to its end state — never two at once. */
+  const finalizeActiveMaterialize = useCallback(() => {
+    const cur = materializeRef.current;
+    if (!cur) return;
+    if (cur.variant === 'import' && !cur.announceFirst) setFirstSkinMsg('saved.');
+    setMaterializeScale(1);
+    setMaterialize(null);
+    dispatchCeremony({ type: 'MATERIALIZE_END' });
+  }, [dispatchCeremony]);
 
-  /** equip swap window = hold start; import swap window = reveal start. */
-  const handleCurtainSwap = () => {
-    if (!curtain) return;
-    if (curtain.variant === 'equip') {
-      setPreviewId(null);           // hero falls back to the worn skin, behind the curtain
-      setMirrorEpoch((e) => e + 1); // remount → the GREETING wave greets the dissolve
-    } else {
-      setPreviewId(curtain.skinId); // the new skin appears exactly at reveal start
+  /**
+   * The ladder loop. Runs while a materialization is active; complete, skip
+   * (click anywhere), reduced motion and the fps guard all land on the SAME
+   * terminal state: scale 1, no second animation. The swap window is the
+   * start itself — the hero remount happens in the same batch as the
+   * ceremony start (equip success / import success), so the character's
+   * first visible frame is already at the first rung and the GREETING wave
+   * plays while the climb runs.
+   */
+  useEffect(() => {
+    if (!materialize) return;
+    let finished = false;
+    let raf = 0;
+    let start = 0;
+    let lastFrame = 0;
+    const samples: number[] = [];
+    let fpsDecided = false;
+    const budget =
+      materialize.variant === 'equip' ? EQUIP_MATERIALIZE_BUDGET : IMPORT_MATERIALIZE_BUDGET;
+
+    const finish = (viaSkip: boolean) => {
+      if (finished) return;
+      finished = true;
+      cancelAnimationFrame(raf);
+      if (materialize.variant === 'import' && !materialize.announceFirst) setFirstSkinMsg('saved.');
+      setMaterializeScale(1);
+      setMaterialize(null);
+      dispatchCeremony({ type: 'MATERIALIZE_END' });
+    };
+
+    // Click anywhere during the climb → jump straight to scale 1.
+    const onSkipClick = () => finish(true);
+    window.addEventListener('click', onSkipClick, true);
+
+    const reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduced) {
+      finish(false); // no ladder → full resolution immediately
+      window.removeEventListener('click', onSkipClick, true);
+      return;
     }
-  };
 
-  /** Complete and skip land on the same final state; the canvas unmounts instantly. */
-  const handleCurtainEnd = () => {
-    if (curtain?.variant === 'import' && !curtain.announceFirst) setFirstSkinMsg('saved.');
-    setCurtain(null);
-    dispatchCeremony({ type: 'CURTAIN_END' });
-  };
+    setMaterializeScale(materialize.variant === 'equip' ? EQUIP_LADDER[0] : IMPORT_LADDER[0]);
+    const tick = (now: number) => {
+      if (finished) return;
+      if (start === 0) {
+        start = now;
+        lastFrame = now;
+      }
+      const elapsed = now - start;
+      // fps guard: sample the first 200ms, decide once; ≥3 samples with a
+      // median interval >50ms → abandon the ladder, jump to 1. Fewer samples
+      // → no evidence, no action.
+      if (!fpsDecided) {
+        if (elapsed <= SKIP_SAMPLE_WINDOW_MS) samples.push(now - lastFrame);
+        else {
+          fpsDecided = true;
+          if (shouldSkipMaterialize(false, samples)) {
+            finish(true);
+            return;
+          }
+        }
+      }
+      lastFrame = now;
+      if (elapsed >= budget) {
+        finish(false);
+        return;
+      }
+      setMaterializeScale(resolutionLadder(elapsed, budget, materialize.variant));
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      window.removeEventListener('click', onSkipClick, true);
+      cancelAnimationFrame(raf);
+    };
+  }, [materialize, dispatchCeremony]);
 
   /** File import and save-current share one reveal — a new skin is born. */
-  const startImportReveal = (list: SkinEntry[], skinId: string, beforeCount: number): boolean => {
+  const startImportMaterialize = (list: SkinEntry[], skinId: string, beforeCount: number): boolean => {
     const entry = list.find((s) => s.id === skinId);
     if (!entry || !entry.dataUrl) return false; // no texture → caller previews instantly
-    finalizeActiveCurtain();
-    setCurtain({
-      variant: 'import',
-      dataUrl: entry.dataUrl,
-      seed: hashSeed(entry.hash),
-      skinId,
-      announceFirst: isFirstSkin(beforeCount, beforeCount + 1),
-    });
+    finalizeActiveMaterialize(); // settle any in-flight materialization — never two at once
+    const announceFirst = isFirstSkin(beforeCount, beforeCount + 1);
+    setPreviewId(skinId);         // the newborn IS the hero, from its first visible frame
+    setMirrorEpoch((e) => e + 1); // remount → the GREETING wave plays during the climb
+    setMaterialize({ variant: 'import', skinId, announceFirst });
+    setMaterializeScale(IMPORT_LADDER[0]);
     return true;
   };
 
   const handleEquip = async (skin: SkinEntry) => {
     if (!canWearCustom) return;
-    finalizeActiveCurtain(); // settle any in-flight curtain — never two layers
+    finalizeActiveMaterialize(); // settle any in-flight materialization — never two at once
     setEquip({ id: skin.id, phase: equipCeremonyNext('idle', { type: 'EQUIP_START' }), msg: 'wearing it now.' });
     try {
       const result = await window.electronAPI.skinsEquip(skin.id);
@@ -445,7 +519,7 @@ const IdentityView: React.FC = () => {
       recordAction('equip');
       await refreshWardrobe();
       if (!skin.dataUrl) {
-        // No texture to curtain with (unreachable via the UI: missing-file
+        // No texture to materialize with (unreachable via the UI: missing-file
         // cards render no equip button) → the honest instant swap.
         setPreviewId(null);
         setMirrorEpoch((e) => e + 1);
@@ -453,17 +527,20 @@ const IdentityView: React.FC = () => {
         return;
       }
       dispatchCeremony({ type: 'EQUIP_SUCCESS' }); // busy → materializing
-      setCurtain({
-        variant: 'equip',
-        dataUrl: skin.dataUrl,
-        seed: hashSeed(skin.hash),
-        skinId: skin.id,
-        announceFirst: false,
-      });
-      // The curtain owns the rest: assemble 400 ms (the button dissolves in
-      // parallel via materializing → 'dissolving' kind), the swap window at
-      // hold start remounts the hero behind the curtain, then the sweep
-      // dissolves and handleCurtainEnd clears the ceremony.
+      // v2: the hero itself materializes. Everything lands in one batch so
+      // the remounted SkinViewerCanvas (new key) renders its first visible
+      // frame of the equipped skin at the first rung — the GREETING wave
+      // plays while the climb runs ("waves while it forms"). previewId
+      // points at the equipped entry: the REAL worn bytes (v1's
+      // previewId→null rendered the bundled Steve, not the worn skin).
+      setPreviewId(skin.id);
+      setMirrorEpoch((e) => e + 1);
+      setMaterialize({ variant: 'equip', skinId: skin.id, announceFirst: false });
+      setMaterializeScale(EQUIP_LADDER[0]);
+      // The ladder owns the rest: rungs climb to 1 over 520ms (the button
+      // dissolves in parallel via materializing → 'dissolving' kind), the
+      // shelf amber underline lands as wearingHash flips mid-climb, and the
+      // loop's finish clears the ceremony exactly at scale 1.
     } catch {
       setEquip({ id: skin.id, phase: 'fail', msg: 'couldn’t reach mojang. nothing changed.' });
       setFailFlash(true);
@@ -633,17 +710,14 @@ const IdentityView: React.FC = () => {
         <p className="text-[13px] text-dim">same game. different you.</p>
 
         <div className="relative mt-2 h-[300px] w-[200px]">
-          <SkinViewerCanvas key={mirrorEpoch} skinUrl={heroUrl} model={heroModel} interactive onOrbitStart={handleOrbitStart} />
-          {curtain && (
-            <PixelCurtain
-              dataUrl={curtain.dataUrl}
-              variant={curtain.variant}
-              seed={curtain.seed}
-              onSwapWindow={handleCurtainSwap}
-              onComplete={handleCurtainEnd}
-              onSkip={handleCurtainEnd}
-            />
-          )}
+          <SkinViewerCanvas
+            key={mirrorEpoch}
+            skinUrl={heroUrl}
+            model={heroModel}
+            interactive
+            onOrbitStart={handleOrbitStart}
+            materializeScale={materialize ? materializeScale : 1}
+          />
           {showDragHint && heroUrl !== undefined && (
             <p className="pointer-events-none absolute -bottom-1 left-1/2 -translate-x-1/2 text-[11px] text-faint transition-opacity duration-300">
               drag to rotate
