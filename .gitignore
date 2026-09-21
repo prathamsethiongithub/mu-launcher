@@ -51,3 +51,4 @@ worlds.json
 identity.json
 identity-tokens.bin
 auth-session.bin
+test-results/
