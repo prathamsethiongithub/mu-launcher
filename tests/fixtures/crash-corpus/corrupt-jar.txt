@@ -1,6 +1,6 @@
-[16:13:43] [main/INFO]: Loading Minecraft 26.1.2 with Fabric Loader 0.19.3
-[16:13:43] [main/INFO]: Mappings not present!
-[16:13:43] [main/ERROR]: Incompatible mods found!
+[22:16:11] [main/INFO]: Loading Minecraft 26.1.2 with Fabric Loader 0.19.3
+[22:16:11] [main/INFO]: Mappings not present!
+[22:16:11] [main/ERROR]: Incompatible mods found!
 net.fabricmc.loader.impl.FormattedException: net.fabricmc.loader.impl.discovery.ModResolutionException: Mod discovery failed!
 	at net.fabricmc.loader.impl.FormattedException.ofLocalized(FormattedException.java:63)
 	at net.fabricmc.loader.impl.FabricLoaderImpl.load(FabricLoaderImpl.java:204)
@@ -14,7 +14,7 @@ Caused by: net.fabricmc.loader.impl.discovery.ModResolutionException: Mod discov
 	at net.fabricmc.loader.impl.FabricLoaderImpl.setup(FabricLoaderImpl.java:222)
 	at net.fabricmc.loader.impl.FabricLoaderImpl.load(FabricLoaderImpl.java:199)
 	... 3 more
-Caused by: java.lang.RuntimeException: java.lang.RuntimeException: Error analyzing [C:\Users\fortn\AppData\Roaming\mu-master-launcher\minecraft\mods\sodium-ancient.jar]: java.util.zip.ZipException: zip END header not found
+Caused by: java.lang.RuntimeException: java.lang.RuntimeException: Error analyzing [C:\Users\fortn\AppData\Roaming\mu-master-launcher\minecraft\mods\corrupted-mod.jar]: java.util.zip.ZipException: zip END header not found
 	at java.base/jdk.internal.reflect.DirectConstructorHandleAccessor.newInstance(DirectConstructorHandleAccessor.java:62)
 	at java.base/java.lang.reflect.Constructor.newInstanceWithCaller(Constructor.java:499)
 	at java.base/java.lang.reflect.Constructor.newInstance(Constructor.java:483)
@@ -23,7 +23,7 @@ Caused by: java.lang.RuntimeException: java.lang.RuntimeException: Error analyzi
 	at java.base/java.util.concurrent.ForkJoinTask.get(ForkJoinTask.java:1019)
 	at net.fabricmc.loader.impl.discovery.ModDiscoverer.discoverMods(ModDiscoverer.java:152)
 	... 5 more
-Caused by: java.lang.RuntimeException: Error analyzing [C:\Users\fortn\AppData\Roaming\mu-master-launcher\minecraft\mods\sodium-ancient.jar]: java.util.zip.ZipException: zip END header not found
+Caused by: java.lang.RuntimeException: Error analyzing [C:\Users\fortn\AppData\Roaming\mu-master-launcher\minecraft\mods\corrupted-mod.jar]: java.util.zip.ZipException: zip END header not found
 	at net.fabricmc.loader.impl.discovery.ModDiscoverer$ModScanTask.compute(ModDiscoverer.java:300)
 	at net.fabricmc.loader.impl.discovery.ModDiscoverer$ModScanTask.compute(ModDiscoverer.java:249)
 	at java.base/java.util.concurrent.RecursiveTask.exec(RecursiveTask.java:110)

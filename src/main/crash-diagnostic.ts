@@ -94,16 +94,25 @@ export async function diagnoseLastCrash(worldRootPath: string): Promise<CrashDia
 
 /**
  * Reason detection, in priority order:
- *   1. `Caused by:` — the JVM's own causal chain (most precise signal).
+ *   1. The `Caused by:` chain — walked to the ROOT (the LAST entry; outer
+ *      levels are wrappers like ModResolutionException). Any OOM level wins
+ *      immediately: it is the one unambiguous signature.
  *   2. `Mixin apply failed` — Fabric's signature for an incompatible mod.
- *   3. `java.lang.OutOfMemoryError` — not a mod at all, just RAM starvation.
+ *   3. `java.lang.OutOfMemoryError` outside a chain — RAM starvation.
  */
 export function detectReason(head: string): string | null {
-  const causedBy = head.match(/^[ \t]*(?:\/\/[ \t]*)?Caused by:[ \t]*(.+)$/m);
-  if (causedBy) {
-    const line = causedBy[1].trim();
-    if (line.includes('OutOfMemoryError')) return 'Out of memory (java.lang.OutOfMemoryError)';
-    return line.length > 200 ? `${line.slice(0, 200)}…` : line;
+  const chain = [
+    ...head.matchAll(/^[ \t]*(?:\/\/[ \t]*)?Caused by:[ \t]*(.+)$/gm),
+  ].map((m) => m[1].trim());
+
+  if (chain.length > 0) {
+    // Any level naming OOM is definitive — RAM starvation, not a mod.
+    if (chain.some((l) => l.includes('OutOfMemoryError'))) {
+      return 'Out of memory (java.lang.OutOfMemoryError)';
+    }
+    // Root cause = innermost/last entry of the chain.
+    const root = chain[chain.length - 1];
+    return root.length > 200 ? `${root.slice(0, 200)}…` : root;
   }
   if (/Mixin apply failed/.test(head)) return 'Mixin apply failed';
   if (/java\.lang\.OutOfMemoryError/.test(head)) return 'Out of memory (java.lang.OutOfMemoryError)';
@@ -111,11 +120,13 @@ export function detectReason(head: string): string | null {
 }
 
 /**
- * Guilty-mod detection. Three independent signals, tried in order of
+ * Guilty-mod detection. Four independent signals, tried in order of
  * reliability:
  *   1. `<modid>.mixins.json` — mixin config files are named after their mod.
- *   2. A mod `.jar` filename mentioned near "Mod file"/"File" markers.
- *   3. A stack-trace class outside the game's own packages — its package
+ *   2. Fabric's pre-launch analyzer: "Error analyzing [<path>]" names the
+ *      exact jar that broke mod discovery (corrupt jar / bad structure).
+ *   3. A mod `.jar` filename mentioned near "Mod file"/"File" markers.
+ *   4. A stack-trace class outside the game's own packages — its package
  *      prefix (e.g. `net.sodium` from `net.sodium.client.X`) is the mod.
  */
 export function detectModName(head: string): string | undefined {
@@ -123,7 +134,19 @@ export function detectModName(head: string): string | undefined {
   const mixin = head.match(/([A-Za-z][\w-]*)\.mixins\.json/);
   if (mixin) return prettifyModId(mixin[1]);
 
-  // 2. A mod jar in the report's environment/file listing.
+  // 2. Fabric pre-launch failure: the analyzer names the offending jar in
+  //    brackets. Both path separators occur (backslash on Windows reports).
+  const analyzing = head.match(
+    /Error analyzing \[[^\]]*[\\\\/]([\w.-]+\.jar)\]/,
+  );
+  if (analyzing) {
+    const modId = analyzing[1]
+      .replace(/\.jar$/i, '')
+      .replace(/-[\d][\w.]*$/, ''); // strip version tail: "sodium-0.5.3" → "sodium"
+    if (modId && !/^minecraft$/i.test(modId)) return prettifyModId(modId);
+  }
+
+  // 3. A mod jar in the report's environment/file listing.
   const jar = head.match(/(?:Mod file|File):[ \t]*([\w.-]+\.jar)/);
   if (jar) {
     const modId = jar[1]

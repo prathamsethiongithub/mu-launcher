@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 /**
- * Crash corpus generator v2 — drives the launcher's REAL launch pipeline
- * (Playwright Electron + launch-game IPC) instead of hand-assembling the
- * MCLC classpath. v1's hand-rolled JVM command died before Fabric even
- * finished initializing (log truncated mid-mod-list, no crash report).
+ * Crash corpus generator v3 — drives the launcher's REAL launch pipeline
+ * (Playwright Electron + launch-game IPC → MCLC) and harvests BOTH crash
+ * surfaces:
+ *   - crash-reports/*.txt   (in-game crashes)
+ *   - logs/*.log.gz         (pre-launch Fabric failures — FormattedException
+ *                            never reaches crash-reports/, it lands in the
+ *                            rotated log; v2 missed this surface entirely)
  *
  * Six scenarios against the real installed runtime. Every scenario:
  *   1. backs up mods/ AND the identity registry
- *   2. stages the scenario (mods content / world RAM / active account)
+ *   2. stages the scenario (real mod binaries from Modrinth / world RAM)
  *   3. launches via the launcher's own launch-game IPC (offline auth)
- *   4. waits for a crash report OR the timeout
- *   5. kills the game, harvests the newest crash report
+ *   4. waits for a crash record OR the timeout
+ *   5. kills the game, harvests, attributes
  *   6. RESTORES everything — the user's environment is sacred
  *
  * Run:  node scripts/generate-crash-corpus.mjs [--scenario=name]
@@ -18,17 +21,20 @@
  */
 
 import { _electron } from 'playwright';
-import { spawn, execSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import * as zlib from 'node:zlib';
 
 const MC_ROOT = path.join(process.env.APPDATA ?? '', 'mu-master-launcher', 'minecraft');
 const CRASH_DIR = path.join(MC_ROOT, 'crash-reports');
+const LOGS_DIR = path.join(MC_ROOT, 'logs');
 const MODS_DIR = path.join(MC_ROOT, 'mods');
 const OUT_DIR = path.resolve('tests/fixtures/crash-corpus');
 const CRASH_TIMEOUT_MS = 3 * 60_000;
 const CLEAN_BASELINE_MS = 60_000;
+const UA = 'mu-master-launcher-qa';
 
 const results = [];
 const restoreStack = [];
@@ -72,28 +78,90 @@ function newestCrashReport(sinceMs) {
   return fs
     .readdirSync(CRASH_DIR)
     .filter((f) => f.endsWith('.txt'))
-    .map((f) => ({ p: path.join(CRASH_DIR, f), m: fs.statSync(p).mtimeMs }))
+    .map((f) => {
+      const full = path.join(CRASH_DIR, f);
+      return { p: full, m: fs.statSync(full).mtimeMs };
+    })
     .filter((x) => x.m >= sinceMs - 2000)
     .sort((a, b) => b.m - a.m)[0]?.p ?? null;
 }
 
-async function waitCrash(sinceMs, timeoutMs, window) {
-  const t0 = Date.now();
-  while (Date.now() - t0 < timeoutMs) {
-    const p = newestCrashReport(sinceMs);
-    if (p) return p;
-    await new Promise((r) => setTimeout(r, 2000));
+const ERROR_RE = /ModResolutionException|FormattedException|Incompatible mods found|Mixin apply failed|OutOfMemoryError/;
+
+/** State of the unrotated latest.log — read incrementally after launch. */
+function latestLogState() {
+  const p = path.join(LOGS_DIR, 'latest.log');
+  const gzs = fs.existsSync(LOGS_DIR) ? fs.readdirSync(LOGS_DIR).filter((f) => f.endsWith('.log.gz')) : [];
+  if (!fs.existsSync(p)) return { size: 0, gzs };
+  return { size: fs.statSync(p).size, gzs };
+}
+
+/**
+ * Harvest the CURRENT run's failure record. Three surfaces, in order:
+ *   1. crash-reports/*.txt newer than sinceMs (in-game crashes)
+ *   2. a NEW rotated .log.gz mentioning the error
+ *   3. the unrotated latest.log tail grown since before.size
+ * surfaces 2–3 additionally require the staged jar name in the record, so a
+ * previous scenario's crash can never be attributed to the current one.
+ */
+function harvestRecord(sinceMs, before, stagedJar) {
+  const crash = newestCrashReport(sinceMs);
+  if (crash) return { surface: 'crash-reports', p: crash };
+
+  const logsDir = path.join(MC_ROOT, 'logs');
+  const fresh = (latestLogState().gzs).filter((f) => !before.gzs.includes(f));
+  for (const f of fresh) {
+    try {
+      const text = zlib.gunzipSync(fs.readFileSync(path.join(logsDir, f))).toString('utf8');
+      if (ERROR_RE.test(text) && (!stagedJar || text.includes(stagedJar))) {
+        return { surface: 'rotated-log', p: path.join(logsDir, f), text };
+      }
+    } catch { /* skip undecodable */ }
   }
-  await window.evaluate(() => window.electronAPI.cancelLaunch().catch(() => {}));
+
+  const lp = path.join(logsDir, 'latest.log');
+  if (fs.existsSync(lp)) {
+    const buf = fs.readFileSync(lp);
+    const tail = buf.subarray(Math.min(before.size, buf.length)).toString('utf8');
+    if (ERROR_RE.test(tail) && (!stagedJar || tail.includes(stagedJar))) {
+      return { surface: 'latest-log', p: lp, text: tail };
+    }
+  }
   return null;
 }
 
+async function waitCrashRecord(sinceMs, timeoutMs, window, before, stagedJar) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    const rec = harvestRecord(sinceMs, before, stagedJar);
+    if (rec) return rec;
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  await window.evaluate(() => window.electronAPI.cancelLaunch().catch(() => {}));
+  return harvestRecord(sinceMs, before, stagedJar);
+}
+
+async function fetchJson(url) {
+  const res = await fetch(url, { headers: { 'User-Agent': UA } });
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  return res.json();
+}
+
+async function downloadModJar(url, dest) {
+  const res = await fetch(url, { headers: { 'User-Agent': UA } });
+  if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (!(buf[0] === 0x50 && buf[1] === 0x4b)) {
+    throw new Error('downloaded file is not a zip/jar (PK magic missing) — refusing to stage');
+  }
+  fs.writeFileSync(dest, buf);
+  return buf.length;
+}
+
 // ── main ────────────────────────────────────────────────────────────────────
-console.log('CRASH CORPUS GENERATOR v2 (launcher-pipeline driver)');
+console.log('CRASH CORPUS GENERATOR v3 (launcher-pipeline driver, dual-surface harvest)');
 const only = process.argv.find((a) => a.startsWith('--scenario='))?.split('=')[1];
 
-// Identity backup: the generator swaps the active account to an offline one
-// (launch-game refuses MS accounts without live tokens; offline = dummy token).
 const identityPath = path.join(process.env.APPDATA ?? '', 'mu-master-launcher', 'identity.json');
 const identityBackup = path.join(os.tmpdir(), 'crash-corpus-identity.json.bak');
 const hadIdentity = fs.existsSync(identityPath);
@@ -124,8 +192,6 @@ async function launchApp() {
   if (!window) throw new Error('main window never appeared');
   await window.waitForLoadState('domcontentloaded');
   await window.waitForTimeout(2500); // identity service ready
-  // Ensure an offline account is active — offline auth = dummy token, which
-  // the real MCLC pipeline accepts for offline mode.
   await window.evaluate(async () => {
     const accounts = await window.electronAPI.getAccounts();
     const offline = accounts.find((a) => a.type === 'offline');
@@ -135,40 +201,31 @@ async function launchApp() {
   });
 }
 
-async function stageMods(fn) {
-  snapshotMods();
-  fn();
-}
-
-async function launchAndWait(name, timeoutMs) {
+async function launchAndWait(name, timeoutMs, stagedJar) {
   const javaPath = await window.evaluate(() => window.electronAPI.getJavaPath());
-  const t0 = Date.now();
-  const result = await window.evaluate(
-    (jp) => window.electronAPI.launchGame(jp),
-    javaPath,
-  );
-  console.log(`  launch-game ack (${Date.now() - t0}ms):`, JSON.stringify(result).slice(0, 120));
-  const report = await waitCrash(t0, timeoutMs, window);
+  const before = latestLogState();
+  const since = Date.now();
+  const result = await window.evaluate((jp) => window.electronAPI.launchGame(jp), javaPath);
+  console.log(`  launch-game ack:`, JSON.stringify(result).slice(0, 100));
+  const record = await waitCrashRecord(since, timeoutMs, window, before, stagedJar);
   killMinecraft();
   await new Promise((r) => setTimeout(r, 1500));
-  let outFile = null;
-  if (report) {
-    fs.mkdirSync(OUT_DIR, { recursive: true });
-    outFile = path.join(OUT_DIR, `${name}.txt`);
-    fs.copyFileSync(report, outFile);
-    console.log(`  crash harvested → ${path.basename(outFile)}`);
-  }
+  if (!record) return null;
+  fs.mkdirSync(OUT_DIR, { recursive: true });
+  const outFile = path.join(OUT_DIR, `${name}.txt`);
+  fs.writeFileSync(outFile, record.surface === 'crash-reports' ? fs.readFileSync(record.p) : record.text);
+  console.log(`  harvested from ${record.surface} → ${path.basename(outFile)}`);
   return outFile;
 }
 
 function attribute(outFile) {
   if (!outFile) return null;
   const head = fs.readFileSync(outFile, 'utf8').slice(0, 5000);
-  const reason = /Caused by:\s*(.+)/.exec(head)?.[1]?.slice(0, 100)
-    ?? (/Mixin apply failed/.test(head) ? 'Mixin apply failed' : null)
-    ?? (/OutOfMemoryError/.test(head) ? 'OutOfMemoryError' : null);
+  const chain = [...head.matchAll(/Caused by:\s*(.+)/g)].map((m) => m[1].trim());
+  const reason = chain.length ? chain[chain.length - 1].slice(0, 100) : null;
   const mixinMod = /([A-Za-z][\w-]*)\.mixins\.json/.exec(head)?.[1];
-  return { reason, mixinMod };
+  const analyzing = /Error analyzing \[[^\]]*\\([\w.-]+\.jar)\]/.exec(head)?.[1];
+  return { reason, mixinMod, analyzing };
 }
 
 try {
@@ -178,12 +235,17 @@ try {
   const scenarios = [
     {
       name: 'dependency',
-      stage: () => {
+      stage: async () => {
         clearMods();
-        execSync(
-          'curl -sL --fail -o sodium-fabric.jar "https://api.modrinth.com/v2/project/sodium/version"',
-          { cwd: MODS_DIR, stdio: 'ignore', shell: 'cmd.exe' },
+        // Newest sodium FOR MC 26.1.2, but fabric-api ABSENT → the loader must
+        // fail resolution with a missing-dependency error.
+        const versions = await fetchJson(
+          'https://api.modrinth.com/v2/project/sodium/version?loaders=%5B%22fabric%22%5D&game_versions=%5B%2226.1.2%22%5D',
         );
+        const newest = versions[0];
+        const file = newest.files.find((f) => f.primary) ?? newest.files[0];
+        const bytes = await downloadModJar(file.url, path.join(MODS_DIR, file.filename));
+        console.log(`  staged ${file.filename} (${Math.round(bytes / 1024)}KB) — no fabric-api present`);
       },
     },
     {
@@ -196,7 +258,7 @@ try {
     {
       name: 'oom',
       stage: async () => {
-        // Real full mod set + tiny heap: set the world RAM to 512 MB via IPC.
+        // Real full mod set + tiny heap: force 512 MB via world settings IPC.
         const worlds = await window.evaluate(() => window.electronAPI.getWorlds());
         for (const w of worlds) {
           await window.evaluate(
@@ -206,16 +268,17 @@ try {
         }
         console.log(`  RAM forced to 512 MB across ${worlds.length} world(s)`);
       },
-      pre: true, // stage is async
     },
     {
       name: 'version-mismatch',
-      stage: () => {
+      stage: async () => {
         clearMods();
-        fs.writeFileSync(
-          path.join(MODS_DIR, 'sodium-ancient.jar'),
-          Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from('0'.repeat(4096))]),
-        );
+        // A REAL old sodium build (targets a legacy MC) → incompatible.
+        const versions = await fetchJson('https://api.modrinth.com/v2/project/sodium/version');
+        const oldest = versions[versions.length - 1];
+        const file = oldest.files.find((f) => f.primary) ?? oldest.files[0];
+        const bytes = await downloadModJar(file.url, path.join(MODS_DIR, file.filename));
+        console.log(`  staged ${file.filename} (version ${oldest.version_number})`);
       },
     },
     {
@@ -230,8 +293,10 @@ try {
     if (only && sc.name !== only) continue;
     console.log(`\n── ${sc.name} ──`);
     killMinecraft();
-    await stageMods(sc.stage);
-    const outFile = await launchAndWait(sc.name, sc.timeoutMs ?? CRASH_TIMEOUT_MS);
+    snapshotMods();
+    await sc.stage();
+    const stagedJar = { 'dependency': 'sodium-fabric-0.9.2', 'corrupt-jar': 'corrupted-mod.jar', 'version-mismatch': 'sodium-fabric-mc1.16.3' }[sc.name] ?? null;
+    const outFile = await launchAndWait(sc.name, sc.timeoutMs ?? CRASH_TIMEOUT_MS, stagedJar);
     killMinecraft();
     const crashed = !!outFile;
     const asExpected = crashed === (sc.expectCrash ?? true);
@@ -261,4 +326,4 @@ fs.mkdirSync(OUT_DIR, { recursive: true });
 const manifest = { generatedAt: new Date().toISOString(), scenarios: results };
 fs.writeFileSync(path.join(OUT_DIR, 'manifest.json'), JSON.stringify(manifest, null, 2));
 console.log(`\nmanifest: ${path.join(OUT_DIR, 'manifest.json')}`);
-console.log(`corpus: ${results.filter((r) => r.crashed).length}/${results.length} scenarios produced crash files`);
+console.log(`corpus: ${results.filter((r) => r.crashed).length}/${results.length} scenarios produced crash records`);

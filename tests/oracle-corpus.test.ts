@@ -15,7 +15,8 @@ interface CorpusEntry {
   scenario: string;
   crashed: boolean;
   file: string | null;
-  asExpected: boolean;
+  note?: string;
+  groundTruth?: { reason: string; modName: string };
 }
 
 const manifest = JSON.parse(
@@ -23,41 +24,57 @@ const manifest = JSON.parse(
 ) as { scenarios: CorpusEntry[] };
 
 describe('oracle vs crash corpus', () => {
+  it('manifest exists and carries all six scenarios', () => {
+    expect(manifest.scenarios.map((s) => s.scenario).sort()).toEqual([
+      'clean-baseline',
+      'corrupt-jar',
+      'dependency',
+      'external-skin',
+      'oom',
+      'version-mismatch',
+    ].sort());
+  });
+
   for (const entry of manifest.scenarios) {
-    if (!entry.file) {
-      it(`[${entry.scenario}] no harvestable crash file — recorded honestly, oracle N/A`, () => {
-        // These scenarios DID run (v2 drives the real pipeline); their crash
-        // surface either produced no report within the window (oom: 512 MB
-        // held; version-mismatch: surface not yet captured) or the run was
-        // intentionally clean (clean-baseline). The manifest records reality.
+    if (entry.crashed && entry.file) {
+      it(`[${entry.scenario}] oracle attributes root cause + mod name`, () => {
+        const head = fs.readFileSync(path.join(CORPUS, entry.file as string), 'utf8').slice(0, 5000);
+        const reason = detectReason(head);
+        const modName = detectModName(head);
+        const gt = entry.groundTruth;
+        // Root-cause semantics: the reason must NOT be the outer wrapper.
+        expect(reason).toBeTruthy();
+        expect(reason).not.toMatch(/ModResolutionException: Mod discovery failed/);
+        if (gt) {
+          expect(reason).toContain(gt.reason);
+          // "unable to attribute" is not acceptable where ground truth exists.
+          expect(modName, 'modName must be defined').toBeDefined();
+          expect(modName).toBe(gt.modName);
+        }
+      });
+    } else {
+      it(`[${entry.scenario}] no crash record — oracle must not fabricate one`, () => {
+        // These scenarios ran and honestly produced no crash: dependency
+        // (sodium 0.9.2 boots without fabric-api), the old version-mismatch
+        // jar was silently skipped, oom held at 512 MB, clean-baseline clean.
+        expect(entry.file).toBeNull();
         expect(entry.crashed).toBe(false);
       });
-      continue;
     }
-
-    const head = fs.readFileSync(path.join(CORPUS, entry.file), 'utf8').slice(0, 5000);
-
-    it(`[${entry.scenario}] oracle attributes the failure`, () => {
-      const reason = detectReason(head);
-      const modName = detectModName(head);
-      // A crashed record MUST yield a reason (that is the Oracle's core job).
-      expect(reason, 'reason must be detected from the corpus record').toBeTruthy();
-      // Pre-launch Fabric failures surface as resolution errors.
-      if (/ModResolutionException/.test(head)) {
-        expect(reason).toMatch(/Mod resolution|Mod discovery|Missing|Caused/i);
-      }
-      if (/Mixin apply failed/.test(head)) {
-        expect(reason).toMatch(/Mixin apply failed/i);
-      }
-      // modName is best-effort; if found it must not be a vanilla package.
-      if (modName) {
-        expect(modName.toLowerCase()).not.toMatch(/^(minecraft|java|mojang|fabric)$/);
-      }
-      expect(entry.asExpected).toBe(true);
-    });
   }
 
-  it('corpus manifest exists and carries scenarios', () => {
-    expect(manifest.scenarios.length).toBeGreaterThanOrEqual(6);
+  it('corrupt-jar record: detectReason reaches the innermost root cause (multi-level chain)', () => {
+    const head = fs.readFileSync(path.join(CORPUS, 'corrupt-jar.txt'), 'utf8').slice(0, 5000);
+    // The chain has FOUR Caused by levels; the pre-fix implementation returned
+    // the outermost wrapper. The fix walks to the last one.
+    const levels = (head.match(/Caused by:/g) ?? []).length;
+    expect(levels).toBeGreaterThanOrEqual(3);
+    const reason = detectReason(head);
+    expect(reason).toBe('java.util.zip.ZipException: zip END header not found');
+  });
+
+  it('corrupt-jar record: detectModName resolves the guilty jar via the Error-analyzing rule', () => {
+    const head = fs.readFileSync(path.join(CORPUS, 'corrupt-jar.txt'), 'utf8').slice(0, 5000);
+    expect(detectModName(head)).toBe('Corrupted Mod');
   });
 });
