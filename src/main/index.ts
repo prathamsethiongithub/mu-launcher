@@ -43,10 +43,12 @@ let javaProvisioner: JavaProvisioner | null = null;
 let worldManager: WorldManager | null = null;
 let identityService: IdentityService | null = null;
 let skinLibrary: SkinLibrary | null = null;
-// The console — passive observer of the launch pipeline. Created eagerly
-// (logs dir lives under userData) and wired to the launch manager per
-// launch-game; IPC handlers below stream its snapshots to the renderer.
-const consoleService = new ConsoleService(join(app.getPath('userData'), 'logs'));
+// The console — passive observer of the launch pipeline. Declared here,
+// DEFINITELY ASSIGNED after the USER DATA ANCHOR below (its logs dir lives
+// under userData), and wired to the launch manager per launch-game; IPC
+// handlers stream its snapshots to the renderer. Every use site runs after
+// the assignment (whenReady / IPC handlers), so the assertion is sound.
+let consoleService!: ConsoleService;
 let launchInProgress = false;
 // Skin file chosen via the main-process dialog. Uploads read this — the
 // renderer never supplies (or sees) a filesystem path.
@@ -58,6 +60,11 @@ let pendingSkinPath: string | null = null;
 // orphaning every account, world and skin on first launch. Pin the path
 // to the historical directory: zero migration risk, invisible to users.
 app.setPath('userData', join(app.getPath('appData'), 'mu-master-launcher'));
+
+// The console service — created AFTER the userData anchor so its session
+// logs land in mu-master-launcher/logs, not the pre-rename ember-launcher
+// directory the default package name would have picked.
+consoleService = new ConsoleService(join(app.getPath('userData'), 'logs'));
 
 function createWindow(): void {
   // ── THE SPLASH ─────────────────────────────────────────────────────────
@@ -740,11 +747,16 @@ function registerIpcHandlers(): void {
     // Create a fresh LaunchManager for each launch
     launchManager = new LaunchManager();
 
-    // Wire up step change events to send to the renderer
+    // Wire up step change events. LaunchManager's onStepChange is a SINGLE
+    // slot — a second call replaces the first — so the renderer forward and
+    // the console tap live in this one callback. Registering the console tap
+    // separately would silently orphan launch-step and freeze PlayView's
+    // progress UI.
     const onStep: StepChangeCallback = (step, status, progress) => {
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('launch-step', step, status, progress);
       }
+      consoleService.addLauncherLine(step, status, progress);
     };
     launchManager.onStepChange(onStep);
 
@@ -770,10 +782,6 @@ function registerIpcHandlers(): void {
         })
         .catch(() => { /* attribution is best-effort */ });
     });
-    const consoleStepTap: StepChangeCallback = (step, status, progress) => {
-      consoleService.addLauncherLine(step, status, progress);
-    };
-    launchManager.onStepChange(consoleStepTap);
 
     try {
       // Memory: the active world's own allocation (Setup → Memory), not a

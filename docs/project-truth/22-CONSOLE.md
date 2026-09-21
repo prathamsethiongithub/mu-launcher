@@ -106,3 +106,44 @@ Existing channels and payloads: untouched. fx/: untouched. No new dependencies, 
 - `tests/console-service.test.ts` — session lifecycle (begin/step/end/cancel/attachOracle), batching (64-line flush), file persistence & read-back, redaction-on-disk, rotation (10-file keep + live-file guard, 5 MB truncate). 18 cases.
 - Suite totals after this feature: **16 files / 225 tests**, all green (baseline 176 → +49).
 - Data-layer benchmark (`tests/console-perf.test.ts`) adds 2 cases: **17 files / 227 tests**, all green. Numbers live in §7.
+- Live-session reduction (`foldConsoleLinePayload` / `isCurrentSessionPayload`, §10): 7 cases in `tests/console-log.test.ts`. **18 files / 234 tests**, all green.
+
+## 10. Real-machine fault record (first live run, 2026-09-21)
+
+The console passed every simulated wiring check but produced **zero lines on a real machine**. Two genuine defects, both found by tracing the exact mount-time state machine instead of the happy path:
+
+### 10.1 Main fault — the renderer's materialization logic contradicted itself
+
+**Symptom:** live stream permanently empty, every session. The snapshot path (entering the console mid-game) worked; the incremental path (Ctrl+L before launch) showed nothing.
+
+**Root cause** (`ConsoleView.tsx` onLine, old L96–99): the `isCurrent` acceptance test allowed a second way in — `payload.meta exists && prev.current === null && meta.status === 'running'` — but the very next ternary built the session only when `isCurrent && prev.current`, i.e. required `prev.current` to already exist. The two conditions were mutually exclusive for the null case:
+
+1. App starts → keep-alive ConsoleView mounts immediately (display:none) → snapshot returns `current: null` (nothing launched yet).
+2. User launches → the first incremental payload (meta, `running`) arrives → accepted by `isCurrent`… then discarded by the ternary → `current` stays `null`.
+3. Every later batch tests `prev.current?.meta.id === payload.sessionId` against null → all subsequent lines dropped forever.
+
+**Fix:** the fold now materializes from null. Extracted to pure functions in `src/shared/console-log.ts` (testable, shared with the renderer):
+
+- `isCurrentSessionPayload(prev, payload)` — already-followed session, OR null-current + a `running` meta (a mounted view sees every session from birth). Terminal metas never claim the live pane from null: a session that ended unseen stays a history entry.
+- `foldConsoleLinePayload(prev, payload)` — `meta: payload.meta ?? prev.current?.meta, entries: [...(prev.current?.entries ?? []), ...payload.entries].slice(-LIVE_BUFFER_CAP)`. A meta-only payload (`entries: []`) materializes; later batches append. `LIVE_BUFFER_CAP` (5000, shared constant) replaces the renderer-local `BUFFER_CAP`.
+
+Also removed the always-true `payload.entries.length >= 0` that had crept into the old acceptance test (was it meant `> 0`, or a meta-only guard? — moot: the new predicate needs no entries-length condition at all).
+
+### 10.2 Secondary fault — `onStepChange` single-slot overwrite (regression from the console wiring)
+
+**Root cause** (`src/main/index.ts` launch-game, old L749/L776): `launchManager.onStepChange(onStep)` forwarded steps to the renderer; `launchManager.onStepChange(consoleStepTap)` then mirrored them into the console. `LaunchManager.onStepChange` is a **single-slot assignment** (`this._onStepChange = callback`, launch-service.ts L343) — the second call silently replaced the first. Result: no `launch-step` events reached the renderer at all → PlayView's launch-progress UI frozen. (Real-machine users may not have noticed; the defect was certain.)
+
+**Fix (choice: single callback doing both jobs)** — the console tap moved *inside* the original `onStep`, which now forwards to the renderer AND calls `consoleService.addLauncherLine`. No second registration; LaunchManager's single-slot semantics deliberately untouched (minimal-change law). The chained-wrapper alternative would have required hoisting `onStep` into a closable variable for an extra indirection — more change, no gain, rejected.
+
+### 10.3 Side fix — consoleService created before the userData anchor
+
+`consoleService` was constructed at module top (old L49) while `app.setPath('userData', …mu-master-launcher')` ran later (L58). Electron's default userData is the package name — `ember-launcher` — so session logs were written to `%APPDATA%/ember-launcher/logs`, invisible to anyone looking in `mu-master-launcher`. Moved the construction to immediately after the anchor; all 12 use sites run inside `whenReady`/IPC handlers, so a definite-assignment declaration (`let consoleService!: ConsoleService`) keeps every call site unchanged.
+
+### 10.4 Verification matrix
+
+| Path | Mechanism | Expected after fix |
+|---|---|---|
+| ① Ctrl+L **before** launch | incremental fold, meta-only first flush materializes from null | lines flow from `step authenticating` onward |
+| ② Ctrl+L **mid-game** | snapshot (`console-snapshot`) serves the live buffer | full history + continuing increments |
+| ③ Launch progress UI | single-slot restored | PlayView stages scroll again (authenticating → running) |
+| ④ Log location | post-anchor construction | `{userData}/logs` = `mu-master-launcher/logs` |
