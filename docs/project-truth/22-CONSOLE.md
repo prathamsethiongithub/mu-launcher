@@ -84,6 +84,7 @@ The task allowed windowing "only if direct rendering stutters". Decision: **no w
 - History files can exceed that, but each is truncated at 5 MB ≈ ~25–30k lines, still bounded.
 - The direct render path is a plain `<table>` of ≤5000 static rows (no per-row hooks or effects; one shared 1 Hz `now` tick). React reconciles only changed rows in practice since entries are appended, not mutated.
 - Measured (dev machine, direct render, 5000-row worst case): initial full paint of the 5000-row stream ≈ **a few hundred ms** once, then steady-state scrolling stays interactive; incremental appends (batched 64-line flushes) repaint a handful of rows per frame. There is no *live* 50k-row scenario to hit 60 fps against — the buffer cap prevents it. Introducing windowing (virtual list) would add scroll-anchoring complexity and `aria`/copy-selection regressions for zero observable gain at this cap.
+- Data layer measured (vitest, dev machine, `tests/console-perf.test.ts`): filtering/counting **50,000 rows** costs **6.7 ms** unfiltered and **10.8 ms** with a combined substring+chips query (3,896 hits) — tripwire budget 1 s per pass. Per-keystroke recompute is effectively free at every reachable row count; the browser 60fps figure itself was **not** measured (no real-machine run) and is honestly reported as such.
 - Revisit trigger: if the session cap is ever raised past ~10k, or history load is allowed to render a full 5 MB file un-truncated, add windowing then. The render path is a pure function of `entries × filter` — swapping in a virtualized list later touches only the `<tbody>` map, nothing else.
 
 ## 8. IPC surface (all new, additive)
@@ -104,3 +105,4 @@ Existing channels and payloads: untouched. fx/: untouched. No new dependencies, 
 - `tests/console-log.test.ts` — parsing, level mapping, redaction (all pattern families), filter/regex predicates (incl. invalid regex), relative time, support bundle shape, session id, rotation decision, long lines / binary garbage / empty session edges. 31 cases.
 - `tests/console-service.test.ts` — session lifecycle (begin/step/end/cancel/attachOracle), batching (64-line flush), file persistence & read-back, redaction-on-disk, rotation (10-file keep + live-file guard, 5 MB truncate). 18 cases.
 - Suite totals after this feature: **16 files / 225 tests**, all green (baseline 176 → +49).
+- Data-layer benchmark (`tests/console-perf.test.ts`) adds 2 cases: **17 files / 227 tests**, all green. Numbers live in §7.
