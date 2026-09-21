@@ -402,3 +402,48 @@ export function fuzzyMatchActions(
   scored.sort((x, y) => y.score - x.score);
   return scored.map((s) => s.a);
 }
+
+// ── Live-session reduction (renderer's incremental materialization) ─────────
+
+/** The renderer's live-session buffer cap — mirrored main-side (§2, truth 22). */
+export const LIVE_BUFFER_CAP = 5000;
+
+/**
+ * Does this incremental payload belong to the session the renderer is
+ * currently following? Two ways in: the payload's session is already the
+ * followed one, or nothing is followed yet and a `running` meta arrives —
+ * the launch just started while this view was mounted (the keep-alive
+ * ConsoleView sees every session from birth).
+ */
+export function isCurrentSessionPayload(
+  prev: ConsoleSnapshot,
+  payload: ConsoleLinePayload
+): boolean {
+  if (prev.current?.meta.id === payload.sessionId) return true;
+  return payload.meta !== undefined && prev.current === null && payload.meta.status === 'running';
+}
+
+/**
+ * Fold one incremental payload into the renderer's live-session state.
+ * Pure — the only state transformation the onLine handler performs.
+ *
+ * A meta-only payload (entries: []) can materialize the session from
+ * null: the first flush after beginSession carries the meta before any
+ * lines exist. Later payloads append and re-cap at LIVE_BUFFER_CAP,
+ * newest kept, matching the main-side buffer semantics.
+ */
+export function foldConsoleLinePayload(
+  prev: ConsoleSnapshot,
+  payload: ConsoleLinePayload
+): ConsoleSnapshot {
+  const sessions = payload.meta
+    ? [payload.meta, ...prev.sessions.filter((s) => s.id !== payload.meta!.id)]
+    : prev.sessions;
+  const current = isCurrentSessionPayload(prev, payload)
+    ? {
+        meta: payload.meta ?? prev.current!.meta,
+        entries: [...(prev.current?.entries ?? []), ...payload.entries].slice(-LIVE_BUFFER_CAP),
+      }
+    : prev.current;
+  return { sessions, current };
+}

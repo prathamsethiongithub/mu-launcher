@@ -18,10 +18,15 @@ import {
   supportWindow,
   buildSupportBundle,
   fuzzyMatchActions,
+  foldConsoleLinePayload,
+  isCurrentSessionPayload,
+  LIVE_BUFFER_CAP,
   MAX_SESSION_BYTES,
   type ConsoleEntry,
+  type ConsoleSnapshot,
   type FilterState,
   type PaletteAction,
+  type SessionMeta,
 } from '../src/shared/console-log';
 
 const T = Date.UTC(2026, 8, 21, 12, 0, 0); // fixed epoch for determinism (2026-09-21T12:00:00Z)
@@ -289,5 +294,75 @@ describe('command palette fuzzy match', () => {
 
   it('no match yields empty list', () => {
     expect(fuzzyMatchActions('zzzqqq', actions)).toEqual([]);
+  });
+});
+
+describe('live-session reduction (foldConsoleLinePayload)', () => {
+  const meta: SessionMeta = { id: 'session-1', startedAt: T, status: 'running' };
+  const empty: ConsoleSnapshot = { sessions: [], current: null };
+
+  it('materializes the session from null on a meta-only payload', () => {
+    // The real-machine fault: the first flush after beginSession carries
+    // meta + zero entries. Before the fix this could not create a session.
+    const next = foldConsoleLinePayload(empty, { sessionId: meta.id, entries: [], meta });
+    expect(next.current).not.toBeNull();
+    expect(next.current!.meta.id).toBe(meta.id);
+    expect(next.current!.entries).toEqual([]);
+  });
+
+  it('appends later batches to the materialized session', () => {
+    const a = entry({ text: 'first' });
+    const b = entry({ text: 'second' });
+    const materialized = foldConsoleLinePayload(empty, { sessionId: meta.id, entries: [a], meta });
+    const next = foldConsoleLinePayload(materialized, { sessionId: meta.id, entries: [b] });
+    expect(next.current!.entries.map((e) => e.text)).toEqual(['first', 'second']);
+    expect(next.sessions.map((s) => s.id)).toEqual([meta.id]);
+  });
+
+  it('accepts a payload whose session is already followed, even without meta', () => {
+    const followed: ConsoleSnapshot = { sessions: [meta], current: { meta, entries: [entry({ text: 'x' })] } };
+    const next = foldConsoleLinePayload(followed, { sessionId: meta.id, entries: [entry({ text: 'y' })] });
+    expect(next.current!.entries.map((e) => e.text)).toEqual(['x', 'y']);
+    // The followed session's meta is preserved when the payload omits it.
+    expect(next.current!.meta).toBe(meta);
+  });
+
+  it('ignores payloads from a non-current session', () => {
+    const other: SessionMeta = { id: 'session-2', startedAt: T, status: 'crashed' };
+    const followed: ConsoleSnapshot = { sessions: [meta], current: { meta, entries: [entry({ text: 'keep' })] } };
+    const next = foldConsoleLinePayload(followed, { sessionId: other.id, entries: [entry({ text: 'drop' })], meta: other });
+    // Live buffer untouched…
+    expect(next.current!.entries.map((e) => e.text)).toEqual(['keep']);
+    // …but the sessions list learned the other session.
+    expect(next.sessions.map((s) => s.id)).toEqual([other.id, meta.id]);
+  });
+
+  it('ignores a running meta when a different session is already materialized', () => {
+    const followed: ConsoleSnapshot = { sessions: [meta], current: { meta, entries: [entry({ text: 'live' })] } };
+    const rogue: SessionMeta = { id: 'session-rogue', startedAt: T, status: 'running' };
+    expect(isCurrentSessionPayload(followed, { sessionId: rogue.id, entries: [], meta: rogue })).toBe(false);
+    const next = foldConsoleLinePayload(followed, { sessionId: rogue.id, entries: [], meta: rogue });
+    expect(next.current!.meta.id).toBe(meta.id);
+  });
+
+  it('keeps only the newest LIVE_BUFFER_CAP entries', () => {
+    let snap: ConsoleSnapshot = { sessions: [], current: null };
+    snap = foldConsoleLinePayload(snap, { sessionId: meta.id, entries: [], meta });
+    const burst = Array.from({ length: LIVE_BUFFER_CAP + 25 }, (_, i) => entry({ text: `line ${i}` }));
+    snap = foldConsoleLinePayload(snap, { sessionId: meta.id, entries: burst });
+    expect(snap.current!.entries.length).toBe(LIVE_BUFFER_CAP);
+    // Newest kept, oldest dropped.
+    expect(snap.current!.entries[0].text).toBe('line 25');
+    expect(snap.current!.entries.at(-1)!.text).toBe(`line ${LIVE_BUFFER_CAP + 24}`);
+  });
+
+  it('does not follow a terminal meta from null — it lands in the sessions list', () => {
+    const done: SessionMeta = { id: meta.id, startedAt: T, endedAt: T + 1000, status: 'clean exit', exitCode: 0 };
+    const next = foldConsoleLinePayload(empty, { sessionId: done.id, entries: [], meta: done });
+    // Materialization from null is a live-follow gesture: only a running
+    // session claims the live pane. A session that ended before the
+    // renderer ever saw it stays a history entry.
+    expect(next.current).toBeNull();
+    expect(next.sessions[0].status).toBe('clean exit');
   });
 });

@@ -10,6 +10,7 @@ import {
   buildSupportBundle,
   countChip,
   countMatches,
+  foldConsoleLinePayload,
   fuzzyMatchActions,
   isValidRegex,
   matchesFilter,
@@ -31,7 +32,6 @@ import {
 
 const SESSION_FIRST_LINE = "ember console. everything you're about to see is what actually happened.";
 const EMPTY_TEXT = 'nothing here yet. launch the game.';
-const BUFFER_CAP = 5000;
 const TICK_MS = 1000;
 
 interface SessionsState {
@@ -108,17 +108,7 @@ function ConsoleView({ initialSessionId }: { initialSessionId?: string | null })
     });
     const onLine = (payload: Parameters<Parameters<typeof window.electronAPI.onConsoleLine>[0]>[0]) => {
       if (!mounted) return;
-      setState((prev) => {
-        const sessions = payload.meta
-          ? [payload.meta, ...prev.sessions.filter((s) => s.id !== payload.meta!.id)]
-          : prev.sessions;
-        const isCurrent = prev.current?.meta.id === payload.sessionId
-          || (payload.meta && payload.entries.length >= 0 && prev.current === null && payload.meta.status === 'running');
-        const current = isCurrent && prev.current
-          ? { meta: payload.meta ?? prev.current.meta, entries: [...prev.current.entries, ...payload.entries].slice(-BUFFER_CAP) }
-          : prev.current;
-        return { sessions, current };
-      });
+      setState((prev) => foldConsoleLinePayload(prev, payload));
       if (!atBottomRef.current) {
         setNewSinceScroll((n) => n + payload.entries.length);
       }
