@@ -73,11 +73,34 @@ resolution-error pattern, any attributed mod name is non-vanilla.
 
 | Audit | Verdict | Findings |
 |---|---|---|
-| IPC three-way (main/preload/env.d.ts) | ✅ clean | 75 main handlers (unique, no dupes) · 73 preload invokes · 0 preload channels without a main handler · **2 main handlers with no preload invoke**: `get-installed-versions`, `mod-download` (main-only by design, noted in truth 18 §5) · task-sheet's "159 handlers" was wrong for this branch — measured 75 |
-| useEffect subscriptions | ⚠️ 2 + 1 | 60 call sites, 25 subscribe, **23 paired correctly**. Flagged: (1) **HIGH — PlayView sign-in poll** (`PlayView.tsx:610`, not a useEffect): `onClick` starts a 1s `setInterval` that is cleared ONLY on the success branch — if the user closes the auth panel or signs out mid-poll, the interval polls forever; (2) IdentityView init race — a ref assigned only after awaits is read during the unmount window (racy, low impact); (3) LightPillar (fx/, vendor) correctly paired. |
-| Init order (userData anchor) | ✅ clean | All imports at index.ts L6-23 execute before the L62 anchor, but none read `app.getPath('userData')` at module top; all consumers run inside whenReady/IPC. The consoleService post-anchor construction (truth 22 §10.3) holds. |
+| IPC three-way (main/preload/env.d.ts) | ✅ + 2 orphans | 75 main handlers (unique, no dupes) · 73 preload invokes · **0 preload channels without a main handler** · env.d.ts ↔ preload exact match (89↔89) · 9 event channels all paired. **2 orphan main handlers**: `get-installed-versions` (index.ts:1728) and `mod-download` (index.ts:1233, superseded by `modrinth-download`) — dead surface, remove or wire. Bonus: 13 exposed API methods unused by the renderer (`getPlatform`, `injectServer`, `launchPoc`, `logout`, `runPreflightCheck`, `uploadSkin`, `validateSession`, update-* listeners…). Task-sheet's "159 handlers" was wrong — measured 75. |
+| useEffect audit | ⚠️ 1 HIGH + 2 + 1 design note | 60 call sites; 25 subscribe; **23 paired**. HIGH: PlayView sign-in poll (`:610`, not a useEffect) — 1s `setInterval` cleared only on success branch; unmount/auth-failure → polls forever. MEDIUM: fx/SideRays.jsx:74 — `cleanupFunctionRef` assigned only after async init; unmount inside the window leaks resize+rAF+WebGL. LOW: IdentityView mirror-line 5s timeout uncleaned. DESIGN: bulk-removes (`removeAuthChangedListeners`) are global — two live subscribers would silently de-register each other; safe today only because views are keep-alive. |
+| Init order (userData anchor) | ✅ clean | Anchor L62 precedes every userData reader; no module-top construction. Two fragile-but-safe patterns flagged: identity-service.ts:96 class-field `new SkinService()` and auth-service.ts:24 ctor-time `restoreSession()` — both safe only because construction is post-anchor; prefer path injection. |
 | E2E suite | ✅ 12/12 | see §1 |
-| Oracle vs corpus | ✅ 7/7 | see §2-3 |
+| Oracle vs corpus | ⚠️ **downgraded** | See §4.1 — reason detection 4/4 but only generic wrappers; **mod-name accuracy 0/4**; test assertions partially vacuous; corpus mislabeled/orphaned. |
+
+### 4.1 Oracle vs corpus — full audit (downgraded from ✅)
+
+`npx vitest run tests/oracle-corpus.test.ts` → 7/7 pass, **but the green is partly vacuous**:
+
+**Attribution accuracy on real records (probed via bundled crash-diagnostic + real detectReason/detectModName):**
+
+| Scenario | Reason found | Root cause? | Mod name | False attribution? |
+|---|---|---|---|---|
+| dependency (fabric-resolution-0) | ✅ 4/4 | ❌ outermost `Caused by:` wrapper only (`ModResolutionException: Mod discovery failed!`) — never the actionable child | ❌ **0/4 — `undefined`** (records have no `Mod file:`/`File:` markers; frames are whitelisted `net.fabricmc`/`java`) | ✅ never misattributes — failure mode is silence, not a wrong mod |
+
+**Why the test's green was hollow:**
+- `manifest.json` sets `attribution: null` → no ground truth to assert against.
+- `if (modName) { … }` skips entirely when modName is undefined — which was 100% of cases, so a total mod-naming failure passed silently.
+- The reason regex `/Mod resolution|Mod discovery|Missing|Caused/i` matches the generic wrapper for every shape.
+
+**Corpus integrity problems found by the auditor:**
+- Manifest maps `dependency` → fabric-resolution-0.txt, but that record's jar is `sodium-ancient.jar` (the version-mismatch artifact); the real dependency artifact sits in **orphaned** fabric-resolution-3.txt. 2 of 4 records unreferenced, untested.
+- The generator's dependency stage is broken: `curl -o sodium-fabric.jar "…/project/sodium/version"` saves the Modrinth **JSON** into a `.jar` → produces zip corruption (same shape as corrupt-jar), never a true missing-dependency failure.
+- On-disk records (`fabric-resolution-N.txt`) are not reproducible from the generator's output names — they were harvested manually.
+- `crashed:false` conflates "not captured" with "no crash" for oom/version-mismatch.
+
+**Action items:** teach `detectReason` to walk to the LAST/most-specific `Caused by`; teach `detectModName` the Fabric resolution-log format (`ModResolutionException: Mod discovery failed!` embeds mod ids); fix the generator's dependency fetch (use `/version?facets` JSON → pick `files[].url`); back the corpus with ground truth in the manifest; assert ground truth, not existence.
 
 ## 5. One-command entry points (package.json)
 
