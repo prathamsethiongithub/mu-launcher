@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import ForgeLine, { LaunchStep } from './ForgeLine';
 import PlayerIdentity from './fx/PlayerIdentity';
 import BlurText from './fx/BlurText';
@@ -12,6 +12,8 @@ import MagicRings from './fx/MagicRings';
 // owning the band above the stage it capped how large the hero could be. The
 // component is kept in the repo (fx/WorldBeacon.tsx) but no longer mounted.
 import { SMP_SERVER_HOST, SMP_SERVER_PORT } from '../../shared/constants';
+import { isOomReason, mapDiagnosisToActions, unmatchedModNote } from '../../shared/oracle-recovery';
+import type { InstalledMod, ModUpdateInfoLike, RecoveryAction } from '../../shared/oracle-recovery';
 
 // SideRays (React Bits, ogl — vendor-pristine, locked owner config) is the
 // approved ambient light field for this composition: an amber directional
@@ -143,6 +145,15 @@ const PlayView: React.FC<PlayViewProps> = ({
   const [crashWarning, setCrashWarning] = useState<{ modName?: string; reason?: string } | null>(null);
   // Mod Update Notifier — count of outdated mods in the active world.
   const [modUpdateCount, setModUpdateCount] = useState(0);
+  // ORACLE RECOVERY — the attribution→action layer's renderer state. The
+  // context pieces (installed files, update-checker product) come from the
+  // SAME IPC calls this view already makes; the mapping itself is pure
+  // (src/shared/oracle-recovery.ts) and never invents a pipeline.
+  const [recoveryMods, setRecoveryMods] = useState<InstalledMod[]>([]);
+  const [recoveryUpdates, setRecoveryUpdates] = useState<ModUpdateInfoLike[]>([]);
+  const [recoveryBusy, setRecoveryBusy] = useState<string | null>(null);
+  const [recoveryDone, setRecoveryDone] = useState<string | null>(null);
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
   // Skin sync — bump to remount PlayerIdentity so the hero re-pulls the
   // worn skin (hit the fresh write-through cache, zero network) after an
   // equip in the Identity Studio. The view is keep-alive: without this,
@@ -183,13 +194,23 @@ const PlayView: React.FC<PlayViewProps> = ({
   // guard keeps a failed IPC from ever wedging the view.
   useEffect(() => {
     if (!activeWorld) return;
+    setRecoveryDone(null);
+    setRecoveryError(null);
+    setRecoveryBusy(null);
     window.electronAPI.diagnoseWorld(activeWorld.id).then((result) => {
       if (result.crashed) {
         setCrashWarning({ modName: result.modName, reason: result.reason });
       } else {
         setCrashWarning(null);
+        setRecoveryMods([]);
       }
     }).catch(() => setCrashWarning(null));
+    // The recovery context's mod list — the same listMods call the Mod
+    // Manager uses. A failure just means no mod actions can be honestly
+    // offered (the pure mapping then yields console-only).
+    window.electronAPI.listMods(activeWorld.id)
+      .then((list) => setRecoveryMods(Array.isArray(list) ? list : []))
+      .catch(() => setRecoveryMods([]));
   }, [activeWorld]);
 
   // Mod Update Notifier — check on mount and on every world switch. The
@@ -198,9 +219,39 @@ const PlayView: React.FC<PlayViewProps> = ({
   useEffect(() => {
     if (!activeWorld) return;
     window.electronAPI.checkModUpdates(activeWorld.id).then((result) => {
-      setModUpdateCount(Array.isArray(result) ? result.length : 0);
-    }).catch(() => setModUpdateCount(0));
+      const updates = Array.isArray(result) ? result : [];
+      setModUpdateCount(updates.length);
+      setRecoveryUpdates(updates); // the "has an update?" branch feeds from this
+    }).catch(() => { setModUpdateCount(0); setRecoveryUpdates([]); });
   }, [activeWorld]);
+
+  // ORACLE RECOVERY — the decision table, evaluated from renderer state.
+  // Pure (src/shared/oracle-recovery.ts): an undefined attribution yields
+  // console-only; an unmatched mod name yields console-only + the honest
+  // note; the fallback 'open-console' action rides the existing
+  // onOpenConsole(null) path. Actions recompute as context arrives.
+  const recoveryActions: RecoveryAction[] = useMemo(
+    () => (crashWarning
+      ? mapDiagnosisToActions(crashWarning, {
+          mods: recoveryMods,
+          updates: recoveryUpdates,
+          ramAllocation: activeWorld?.ramAllocation,
+        })
+      : []),
+    [crashWarning, recoveryMods, recoveryUpdates, activeWorld?.ramAllocation],
+  );
+  const recoveryNote = useMemo(
+    () => (crashWarning ? unmatchedModNote(crashWarning, { mods: recoveryMods, updates: recoveryUpdates }) : null),
+    [crashWarning, recoveryMods, recoveryUpdates],
+  );
+  // Honest head-line vocabulary: a named mod states the fact; an OOM
+  // attribution (low confidence) gets the "might be" downgrade; an unknown
+  // attribution gets the no-hope line — never a repair button.
+  const crashHeadline = crashWarning?.modName
+    ? `${crashWarning.modName} caused your last crash.`
+    : isOomReason(crashWarning?.reason)
+      ? 'your world might have run out of memory.'
+      : "couldn't name this one. details in the console.";
 
   // Skin sync — a successful equip in the Identity Studio must reach the hero
   // immediately: remount PlayerIdentity (keep-alive means it never re-fetches
@@ -250,6 +301,68 @@ const PlayView: React.FC<PlayViewProps> = ({
     setShowSwitcher(false); // never leave a stale popover open across a launch
     try { localStorage.setItem(EMBER_KEY, String(getEmberCount() + 1)); } catch { /* ignore */ }
     onPlay();
+  };
+
+  // ── ORACLE RECOVERY — the executor ──────────────────────────────────────
+  // Mapping → existing pipelines, nothing else: perform-mod-update,
+  // mod-delete, update-world-settings, onOpenConsole. Failures leave ALL
+  // state unchanged (honest failure: "nothing changed") and speak human.
+  const handleRecovery = async (action: RecoveryAction) => {
+    if (!activeWorld || recoveryBusy) return;
+    setRecoveryBusy(action.id);
+    setRecoveryError(null);
+    setRecoveryDone(null);
+    try {
+      if (action.id === 'open-console') {
+        onOpenConsole?.(null);
+        return;
+      }
+      if (action.id === 'update-mod') {
+        const update = recoveryUpdates.find((u) => u.filename === action.filename);
+        if (!update) {
+          setRecoveryError("couldn't reach modrinth. nothing changed.");
+          return;
+        }
+        const result = await window.electronAPI.performModUpdate(
+          activeWorld.id, update.filename, update.downloadUrl, update.newFilename,
+        );
+        if (!result.success) {
+          setRecoveryError(
+            /fetch|network|ENOTFOUND|HTTP|timed? out/i.test(result.error ?? '')
+              ? "couldn't reach modrinth. nothing changed."
+              : "couldn't update the mod. nothing changed.",
+          );
+          return;
+        }
+        setRecoveryDone(`${(crashWarning?.modName ?? 'the mod').toLowerCase()} updated. relaunch?`);
+      } else if (action.id === 'remove-mod') {
+        if (!action.filename) return;
+        const result = await window.electronAPI.deleteMod(activeWorld.id, action.filename);
+        if (!result.success) {
+          setRecoveryError("couldn't remove the mod. nothing changed.");
+          return;
+        }
+        setRecoveryDone(`${(crashWarning?.modName ?? 'the mod').toLowerCase()} removed. relaunch?`);
+      } else if (action.id === 'adjust-memory') {
+        // Same control the Setup screen owns (update-world-settings, RAM
+        // bounds 1024–16384) — doubling the current allocation, clamped.
+        const next = Math.min(16384, Math.max(1024, (activeWorld.ramAllocation || 4096) * 2));
+        const result = await window.electronAPI.updateWorldSettings(activeWorld.id, { ramAllocation: next });
+        if (!result.success) {
+          setRecoveryError("couldn't change memory. nothing changed.");
+          return;
+        }
+        setRecoveryDone(`gave the game ${next} MB. relaunch?`);
+      }
+      // A changed mods/ directory re-pulls the recovery context so the
+      // actions can't drift from what the disk actually holds.
+      const list = await window.electronAPI.listMods(activeWorld.id).catch(() => []);
+      setRecoveryMods(Array.isArray(list) ? list : []);
+    } catch {
+      setRecoveryError("couldn't reach modrinth. nothing changed.");
+    } finally {
+      setRecoveryBusy(null);
+    }
   };
 
   // ── Connecting (initial auth check) ─────────────────────────────────────
@@ -475,29 +588,73 @@ const PlayView: React.FC<PlayViewProps> = ({
           <BlurText text={hero} />
         </h1>
 
-        {/* THE ORACLE — crash warning banner. Sits between the hero word and
-            the sub-line so the diagnosis is read BEFORE the call to action.
-            Idle states only — an in-flight launch or a running game must not
-            be interrupted by a stale-crash warning. */}
+        {/* THE ORACLE — crash warning + recovery actions. Sits between the
+            hero word and the sub-line so the diagnosis is read BEFORE the
+            call to action. Idle states only — an in-flight launch or a
+            running game must not be interrupted by a stale-crash warning.
+            Honesty red line: an unattributed crash (no modName, no OOM) shows
+            the no-hope line and console evidence — never a repair button. */}
         {crashWarning && !launching && !isRunning && (
-          <div className="rise mt-3 flex items-center justify-center gap-3 rounded-[10px] border border-danger/20 bg-danger/5 px-4 py-2">
-            <span className="text-[12px] text-danger">
-              {crashWarning.modName
-                ? `${crashWarning.modName} caused your last crash.`
-                : 'Your last session crashed.'}
-            </span>
-            {crashWarning.modName && (
-              <span className="text-[11px] text-faint">
-                Remove or disable {crashWarning.modName} in Mod Manager.
-              </span>
+          <div className="rise mt-3 flex flex-col items-center gap-2 rounded-[10px] border border-danger/20 bg-danger/5 px-4 py-2.5">
+            <div className="flex items-center justify-center gap-3">
+              <span className="text-[12px] text-danger">{crashHeadline}</span>
+              {recoveryNote && (
+                <span className="text-[11px] text-faint">{recoveryNote}</span>
+              )}
+              {onOpenConsole && !recoveryActions.some((a) => a.id === 'open-console') && (
+                <button
+                  onClick={() => onOpenConsole(null)}
+                  className="text-[11px] text-faint underline-offset-2 transition-colors duration-micro hover:text-dim hover:underline"
+                >
+                  console
+                </button>
+              )}
+            </div>
+            {/* Recovery actions — same visual language as the equip ritual
+                (amber solid = the one primary, text = secondaries), but
+                restrained: a repair moment, not a celebration. Busy state
+                reuses the equip in-flight pattern: disabled + soft pulse. */}
+            {recoveryActions.length > 0 && (
+              <div className="flex items-center justify-center gap-2" data-testid="oracle-recovery">
+                {recoveryActions.map((action) =>
+                  action.id === 'open-console' ? (
+                    <button
+                      key={action.id}
+                      data-testid={`oracle-action-${action.id}`}
+                      onClick={() => handleRecovery(action)}
+                      className="cursor-pointer text-[11px] text-faint underline-offset-2 transition-colors duration-micro hover:text-dim hover:underline"
+                    >
+                      show evidence
+                    </button>
+                  ) : (
+                    <button
+                      key={action.id}
+                      data-testid={`oracle-action-${action.id}`}
+                      disabled={recoveryBusy !== null}
+                      onClick={() => handleRecovery(action)}
+                      className={`rounded-full px-3.5 py-1 text-[12px] font-medium transition-all duration-150 disabled:opacity-40 disabled:cursor-default ${
+                        recoveryBusy === action.id ? 'oracle-fix-busy' : ''
+                      } ${
+                        action.id === 'update-mod' || action.id === 'adjust-memory'
+                          ? 'bg-ember text-[#0b0a09] hover:bg-ember-deep'
+                          : 'border border-white/[0.12] text-white/70 hover:border-white/[0.24] hover:text-ink'
+                      }`}
+                    >
+                      {action.label}
+                    </button>
+                  ),
+                )}
+              </div>
             )}
-            {onOpenConsole && (
-              <button
-                onClick={() => onOpenConsole(null)}
-                className="text-[11px] text-faint underline-offset-2 transition-colors duration-micro hover:text-dim hover:underline"
-              >
-                console
-              </button>
+            {/* Repair feedback — one quiet line, replaces the action row. */}
+            {recoveryBusy && (
+              <p className="text-[11px] text-faint" data-testid="oracle-recovery-busy">working on it…</p>
+            )}
+            {recoveryDone && (
+              <p className="text-[11px] text-ember" data-testid="oracle-recovery-done">{recoveryDone}</p>
+            )}
+            {recoveryError && (
+              <p className="text-[11px] text-danger/90" data-testid="oracle-recovery-error">{recoveryError}</p>
             )}
           </div>
         )}

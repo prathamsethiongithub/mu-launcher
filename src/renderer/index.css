@@ -118,6 +118,17 @@ body {
 .pill-ember:active { transform: translateY(0) scale(0.985); }
 .pill-ember:disabled { opacity: 0.5; cursor: default; transform: none; }
 
+/* Oracle recovery in-flight pulse — the equip busy state's vocabulary at
+   repair scale: a soft opacity breathe, no glow, no ring (a repair moment,
+   not a celebration). */
+@keyframes oracle-fix-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.oracle-fix-busy {
+  animation: oracle-fix-pulse 1.2s ease-in-out infinite;
+}
+
 /* CTA as image button — custom art replaces the pill. The image is inlined
    in the DOM via <img> (src resolved with import.meta.url in PlayView.tsx),
    so it renders at its natural aspect ratio with no dead zones. */
