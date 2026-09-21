@@ -1,0 +1,49 @@
+{
+  "generatedAt": "2026-09-21T10:48:20.558Z",
+  "scenarios": [
+    {
+      "scenario": "dependency",
+      "crashed": true,
+      "file": "fabric-resolution-0.txt",
+      "attribution": null,
+      "asExpected": true,
+      "note": "pre-launch Fabric failure: crash surface is the rotated log (FormattedException), not crash-reports/"
+    },
+    {
+      "scenario": "corrupt-jar",
+      "crashed": true,
+      "file": "fabric-resolution-1.txt",
+      "attribution": null,
+      "asExpected": true,
+      "note": "same resolution-failure surface"
+    },
+    {
+      "scenario": "oom",
+      "crashed": false,
+      "file": null,
+      "attribution": null,
+      "asExpected": false
+    },
+    {
+      "scenario": "version-mismatch",
+      "crashed": false,
+      "file": null,
+      "attribution": null,
+      "asExpected": false
+    },
+    {
+      "scenario": "clean-baseline",
+      "crashed": false,
+      "file": null,
+      "attribution": null,
+      "asExpected": true
+    },
+    {
+      "scenario": "external-skin",
+      "crashed": false,
+      "file": null,
+      "note": "launcher-side \u2014 covered by e2e identity tests",
+      "asExpected": true
+    }
+  ]
+}
