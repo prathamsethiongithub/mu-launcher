@@ -79,9 +79,9 @@ resolution-error pattern, any attributed mod name is non-vanilla.
 | E2E suite | ✅ 12/12 | see §1 |
 | Oracle vs corpus | ⚠️ **downgraded** | See §4.1 — reason detection 4/4 but only generic wrappers; **mod-name accuracy 0/4**; test assertions partially vacuous; corpus mislabeled/orphaned. |
 
-### 4.1 Oracle vs corpus — full audit (downgraded from ✅)
+## 4.1 Oracle vs corpus — full audit (downgraded from ✅), then FIXED on oracle-truth
 
-`npx vitest run tests/oracle-corpus.test.ts` → 7/7 pass, **but the green is partly vacuous**:
+`npx vitest run tests/oracle-corpus.test.ts` → 7/7 pass, **but the green was partly vacuous**:
 
 **Attribution accuracy on real records (probed via bundled crash-diagnostic + real detectReason/detectModName):**
 
@@ -100,7 +100,13 @@ resolution-error pattern, any attributed mod name is non-vanilla.
 - On-disk records (`fabric-resolution-N.txt`) are not reproducible from the generator's output names — they were harvested manually.
 - `crashed:false` conflates "not captured" with "no crash" for oom/version-mismatch.
 
-**Action items:** teach `detectReason` to walk to the LAST/most-specific `Caused by`; teach `detectModName` the Fabric resolution-log format (`ModResolutionException: Mod discovery failed!` embeds mod ids); fix the generator's dependency fetch (use `/version?facets` JSON → pick `files[].url`); back the corpus with ground truth in the manifest; assert ground truth, not existence.
+**FIXED on `oracle-truth` (commit `a538238`, merged to master):**
+1. `detectReason` walks the full `Caused by:` chain to the innermost/last entry (OOM at any depth still wins). Verified on the real 4-level corpus record: returns `java.util.zip.ZipException: zip END header not found` instead of the wrapper.
+2. `detectModName` gained the Fabric pre-launch rule: `Error analyzing [<path>]` → jar filename → mod name. Verified on real corpus: `corrupted-mod.jar` → "Corrupted Mod".
+3. Corpus generator v3: dependency stage downloads the REAL newest sodium jar via the Modrinth version JSON (PK-verified); version-mismatch downloads the OLDEST build; dual-surface harvest (crash-reports + rotated logs + latest.log tail) with a stale-record guard keyed on the staged jar name — a previous scenario's crash can never be attributed to the current one.
+4. Corpus rebuilt: corrupt-jar record verified (root cause + mod name asserted as ground truth); dependency honestly recorded as no-crash (sodium 0.9.2 boots without fabric-api — a REAL finding: the dependency scenario assumption was wrong for current sodium); oom/version-mismatch honestly negative in-window.
+
+**Action items:** teach `detectReason` to walk to the LAST/most-specific `Caused by`; teach `detectModName` the Fabric resolution-log format (`ModResolutionException: Mod discovery failed!` embeds mod ids); fix the generator's dependency fetch (use `/version?facets` JSON → pick `files[].url`); back the corpus with ground truth in the manifest; assert ground truth, not existence. — ALL DONE (items 1-2 in crash-diagnostic.ts, 3-4 in generator/tests).
 
 ## 5. One-command entry points (package.json)
 
