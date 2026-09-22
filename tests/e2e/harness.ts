@@ -25,8 +25,13 @@ export interface ConsoleCapture {
   errors: string[];
 }
 
-export async function launchTestApp(): Promise<TestApp> {
+export async function launchTestApp(opts?: {
+  /** Seed the throwaway user-data dir (identity.json, skins.json, ...) before
+   *  the app launches — lets a test exercise rich, deterministic states. */
+  seed?: (scratchDir: string) => void;
+}): Promise<TestApp> {
   const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ember-e2e-'));
+  if (opts?.seed) opts.seed(scratchDir);
   const app = await _electron.launch({
     args: ['out/main/index.js', `--user-data-dir=${scratchDir}`],
     timeout: 30_000,

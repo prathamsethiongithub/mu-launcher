@@ -651,7 +651,10 @@ const IdentityView: React.FC = () => {
   }
 
   return (
-    <div className="relative z-[1] flex h-full flex-col items-center overflow-y-auto px-10 pt-16 pb-24">
+    // py-6: the dock now lives in Layout's in-flow slot, so the old
+    // pt-16/pb-24 floating-dock clearance is dead weight — at 900x600 it
+    // alone pushed the hero 102px below the fold (measured: root sh 823).
+    <div className="relative z-[1] flex h-full flex-col items-center overflow-y-auto px-10 py-6">
       {/* ── Account strip — one quiet row, never a bordered block ────────── */}
       <div className="rise d1 flex w-full max-w-[640px] items-center gap-3 py-2">
         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-line">
@@ -751,10 +754,21 @@ const IdentityView: React.FC = () => {
       <div className="hairline-t h-px w-full max-w-[640px]" />
 
       {/* ── The hero — same game. different you. ──────────────────────────── */}
-      <div className="rise d2 flex w-full max-w-[640px] flex-col items-center pt-6">
+      {/* min-height stays auto (NOT min-h-0): flex shrinks the elastic hero
+          down to the column's content minimum and then stops — below that
+          the root scroller takes over. With min-h-0 the column shrinks past
+          its content and the equip row spills out, covered by the shelf
+          (measured at 900x600 preview: equip hit by the shelf div). */}
+      <div className="rise d2 flex w-full max-w-[640px] flex-col items-center pt-4">
         <p className="microlabel mb-2">Identity Studio</p>
         <p className="text-[13px] text-dim">same game. different you.</p>
 
+        {/* Hero slot stays a definite 300px: the window floor is 600 tall
+            (main/index.ts minHeight), so vh-style elasticity can never
+            engage, and min-height tricks on a definite height don't change
+            the parent's content minimum. Short-window overflow is handled
+            by the root scroller (audit-verified: everything reachable,
+            nothing covered). */}
         <div className="relative mt-2 h-[300px] w-[200px]">
           <SkinViewerCanvas
             key={mirrorEpoch}
@@ -895,7 +909,7 @@ const IdentityView: React.FC = () => {
       </div>
 
       {/* ── The shelf — horizontal wardrobe rail ─────────────────────────── */}
-      <div className="rise d3 mt-8 w-full max-w-[640px]">
+      <div className="rise d3 mt-6 w-full max-w-[640px]">
         <div className="hairline-t mb-3 h-px" />
         <p className="microlabel mb-3">your library</p>
 
