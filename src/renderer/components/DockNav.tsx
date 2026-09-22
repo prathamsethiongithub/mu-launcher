@@ -10,6 +10,12 @@ interface DockNavProps {
  * Segmented rail: four nouns on one elevated surface.
  * Order: Play · Worlds · Account · Setup (act, places, person, machine).
  * Never amber — the ember is reserved for the primary action (Law 1).
+ *
+ * Overflow law: the rail lives IN FLOW (Layout's bottom slot reserves its
+ * height) — it used to be `fixed bottom-16`, a layer outside layout that
+ * every view's content could flow under: measured at 900x600 the Play CTA
+ * (bottom 545) was covered by the dock band (top 492), hit-testing to the
+ * Account tab. In flow, nothing can ever intersect it at any window size.
  */
 const ITEMS: { id: View; label: string; icon: React.ReactNode }[] = [
   {
@@ -57,7 +63,7 @@ const ITEMS: { id: View; label: string; icon: React.ReactNode }[] = [
 
 const DockNav: React.FC<DockNavProps> = ({ currentView, onNavigate }) => {
   return (
-    <nav className="fixed bottom-16 left-1/2 z-50 -translate-x-1/2">
+    <nav className="flex items-center">
       <div className="glass flex items-center gap-0.5 rounded-full p-1">
         {ITEMS.map(({ id, label, icon }) => {
           const active = currentView === id;

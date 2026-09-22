@@ -407,11 +407,12 @@ function App() {
 
   return (
     <>
-      <Layout version={appVersion}>
+      <Layout
+        version={appVersion}
+        nav={<DockNav currentView={currentView} onNavigate={setCurrentView} />}
+      >
         {renderView()}
       </Layout>
-
-      <DockNav currentView={currentView} onNavigate={setCurrentView} />
 
       {/* Hearth glow */}
       <div className={hearthFlare ? 'hearth catching' : 'hearth'} />

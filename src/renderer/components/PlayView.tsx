@@ -446,8 +446,13 @@ const PlayView: React.FC<PlayViewProps> = ({
         />
       </div>
 
-      {/* ── The stage ──────────────────────────────────────────────────── */}
-      <div className="relative z-10 flex flex-1 flex-col items-center justify-center px-10">
+      {/* ── The stage ────────────────────────────────────────────────────
+          m-auto instead of justify-center: with a plain centered flex column,
+          content taller than the stage overflows BOTH ends and the top
+          (the eyebrow, h1) is clipped away by main's scroll edge. m-auto
+          pushes the overflow into scrollable space below instead — the
+          measured failure it fixes is the crash-warning banner at 900x600. */}
+      <div className="relative z-10 m-auto min-h-0 flex w-full flex-col items-center px-10 py-4">
         {/* Eyebrow — above the character, quiet, like a label on a museum card.
             With one world: just the server host (unchanged).
             With ≥2 worlds: the active world's name; a chevron surfaces on hover
@@ -516,7 +521,7 @@ const PlayView: React.FC<PlayViewProps> = ({
             The wrapper is wider than the character: the light pool needs
             lateral room inside the canvas edges. Static under reduced-motion. */}
         {isLoggedIn && (
-          <div className="rise relative w-[420px] shrink-0 overflow-hidden" style={{ height: HERO_SLOT }}>
+          <div className="rise relative w-[420px] min-h-[96px] overflow-hidden" style={{ height: HERO_SLOT }}>
             {/* ── MagicRings — the character's identity/aura layer (React Bits,
                 vendor-pristine; see fx/MagicRings.jsx) ──────────────────────
                 ONE instance, mounted as the FIRST child of the hero slot so it
