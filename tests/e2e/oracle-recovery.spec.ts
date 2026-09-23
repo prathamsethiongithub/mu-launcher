@@ -27,12 +27,12 @@ import * as os from 'node:os';
 import { launchTestApp, waitForText, clickButtonByText, type TestApp } from './harness';
 
 /** The throwaway world's root on disk: {userData}/worlds/<id>/minecraft
- *  (world-manager.createWorld), userData pinned to mu-master-launcher. */
+ *  (world-manager.createWorld). The dir is the SHARED user-data passed
+ *  through the harness (--user-data-dir wins over the app's mu-master-
+ *  launcher pin since the isolation fix) — never the real profile. */
+const sharedUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'ember-oracle-e2e-'));
 function worldRoot(id: string): string {
-  return path.join(
-    process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
-    'mu-master-launcher', 'worlds', id, 'minecraft',
-  );
+  return path.join(sharedUserData, 'worlds', id, 'minecraft');
 }
 
 const SODIUM_CRASH = [
@@ -60,7 +60,10 @@ interface ProvisionedWorld {
 async function provisionWorld(
   setup: (workbench: TestApp, worldId: string) => Promise<void>,
 ): Promise<ProvisionedWorld> {
-  const workbench = await launchTestApp();
+  // app#1 as a pure IPC workbench: create + activate + stage files, then
+  // close. Shares the profile with the observing app#2 (default offline
+  // seed keeps the shared profile bootable across both launches).
+  const workbench = await launchTestApp({ userDataDir: sharedUserData });
   let worldId: string | null = null;
   try {
     const world = await workbench.window.evaluate(() =>
@@ -83,9 +86,10 @@ async function provisionWorld(
     id,
     dispose: async () => {
       fs.rmSync(worldRoot(id), { recursive: true, force: true });
-      // Registry entry: a second boot removes it honestly through the app.
+      // Registry entry: a second boot removes it honestly through the app
+      // (same shared profile, so the registry is actually visible).
       try {
-        const cleaner = await launchTestApp();
+        const cleaner = await launchTestApp({ userDataDir: sharedUserData });
         await cleaner.window.evaluate((wid) => window.electronAPI.deleteWorld(wid as string), id);
         await cleaner.cleanup();
       } catch { /* leftover registry entry is inert — the dir is gone */ }
@@ -93,11 +97,9 @@ async function provisionWorld(
   };
 }
 
-async function bootAndObserve(): Promise<TestApp> {
-  const ta = await launchTestApp();
-  await waitForText(ta.window, 'Ready.', 20_000);
-  return ta;
-}
+test.afterAll(async () => {
+  fs.rmSync(sharedUserData, { recursive: true, force: true });
+});
 
 test('oracle-recovery-remove: matched mod renders repair actions and remove deletes the real jar', async () => {
   const world = await provisionWorld(async (workbench, wid) => {
@@ -114,7 +116,8 @@ test('oracle-recovery-remove: matched mod renders repair actions and remove dele
     fs.writeFileSync(path.join(worldRoot(wid), 'crash-reports', 'crash-2026-09-21.txt'), SODIUM_CRASH);
   });
 
-  const ta = await bootAndObserve();
+  const ta = await launchTestApp({ userDataDir: sharedUserData });
+  await waitForText(ta.window, 'Ready.', 20_000);
   try {
     // The attribution line renders (the name is Oracle's prettified "Sodium")…
     expect(await waitForText(ta.window, 'Sodium caused your last crash.', 15_000)).toBe(true);
@@ -145,7 +148,8 @@ test('oracle-recovery-memory: OOM attribution shows the memory action that reall
     'java.lang.OutOfMemoryError: Java heap space\n\tat java.base/java.lang.Thread.run(Unknown Source)\n',
   );
 
-  const ta = await bootAndObserve();
+  const ta = await launchTestApp({ userDataDir: sharedUserData });
+  await waitForText(ta.window, 'Ready.', 20_000);
   try {
     expect(await waitForText(ta.window, 'your world might have run out of memory.', 15_000)).toBe(true);
     expect(await waitForText(ta.window, 'give it more memory', 5_000)).toBe(true);
@@ -178,7 +182,8 @@ test('oracle-recovery-undefined: unattributed crash shows the no-hope line and n
     '---- Minecraft Crash Report ----\n\njava.lang.IllegalStateException: something broke\n\tat net.minecraft.client.main.Main.main(Main.java:1)\n',
   );
 
-  const ta = await bootAndObserve();
+  const ta = await launchTestApp({ userDataDir: sharedUserData });
+  await waitForText(ta.window, 'Ready.', 20_000);
   try {
     // The honest head-line…
     expect(await waitForText(ta.window, "couldn't name this one. details in the console.", 15_000)).toBe(true);

@@ -25,13 +25,57 @@ export interface ConsoleCapture {
   errors: string[];
 }
 
+/** Seed a single active offline account so Play boots to "Ready." — the
+ *  deterministic post-onboarding state the E2E suite assumes. */
+const seedDefaultOfflineAccount = (dir: string): void => {
+  const iso = new Date().toISOString();
+  fs.writeFileSync(
+    path.join(dir, 'identity.json'),
+    JSON.stringify(
+      {
+        accounts: [
+          {
+            id: 'e2e-offline',
+            type: 'offline',
+            username: 'e2e-tester',
+            uuid: '99999999-9999-3999-8999-999999999999',
+            createdAt: iso,
+            lastUsedAt: iso,
+          },
+        ],
+        activeAccountId: 'e2e-offline',
+        sessions: {
+          'e2e-offline': { accountId: 'e2e-offline', authenticated: true, lastValidatedAt: iso },
+        },
+      },
+      null,
+      2,
+    ),
+  );
+};
+
 export async function launchTestApp(opts?: {
   /** Seed the throwaway user-data dir (identity.json, skins.json, ...) before
    *  the app launches — lets a test exercise rich, deterministic states. */
   seed?: (scratchDir: string) => void;
+  /** Reuse a caller-owned user-data dir instead of a fresh throwaway.
+   *  Cleanup will NOT wipe it — the caller owns its lifecycle. Lets two
+   *  app boots share one profile (provision in #1, observe in #2). */
+  userDataDir?: string;
 }): Promise<TestApp> {
-  const scratchDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ember-e2e-'));
-  if (opts?.seed) opts.seed(scratchDir);
+  const scratchDir = opts?.userDataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'ember-e2e-'));
+  const ownsDir = !opts?.userDataDir;
+  if (opts?.seed) {
+    opts.seed(scratchDir);
+  } else {
+    // Deterministic default: an ACTIVE OFFLINE account. Before the app
+    // honored --user-data-dir, every test silently inherited the developer's
+    // real profile (so "Ready." came from their live account). A genuinely
+    // empty profile boots to "Almost there." and breaks boot-gated tests.
+    // resolvePlayerIdentity accepts an active offline account, so this seed
+    // restores the intended post-onboarding state with zero side effects.
+    seedDefaultOfflineAccount(scratchDir);
+  }
   const app = await _electron.launch({
     args: ['out/main/index.js', `--user-data-dir=${scratchDir}`],
     timeout: 30_000,
@@ -66,7 +110,9 @@ export async function launchTestApp(opts?: {
 
   const cleanup = async () => {
     try { await app.close(); } catch { /* already gone */ }
-    try { fs.rmSync(scratchDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    if (ownsDir) {
+      try { fs.rmSync(scratchDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    }
   };
   return { app, window, scratchDir, cleanup, consoleCapture: consoleCapture } as TestApp & {
     consoleCapture: ConsoleCapture;

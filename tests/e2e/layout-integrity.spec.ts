@@ -312,10 +312,19 @@ const seedIdentityProfile = (dir: string): void => {
             createdAt: iso,
             lastUsedAt: iso,
           },
+          {
+            // The empty-library state: second account, no skins, no session.
+            id: 'acc-empty',
+            type: 'offline',
+            username: 'emptyone',
+            uuid: '22222222-2222-3222-8222-222222222222',
+            createdAt: iso,
+          },
         ],
         activeAccountId: 'acc-rich',
         sessions: {
           'acc-rich': { accountId: 'acc-rich', authenticated: true, lastValidatedAt: iso },
+          'acc-empty': { accountId: 'acc-empty', authenticated: true, lastValidatedAt: iso },
         },
       },
       null,
@@ -372,9 +381,9 @@ test.describe('layout integrity (overflow law)', () => {
     }
   });
 
-  // The Identity Studio in its RICH states (empty state is covered above —
-  // fresh installs have no library): offline account with a seeded library,
-  // then the card-preview state. 900x600 = minimum, 1600x500 = ultra-flat.
+  // The Identity Studio in its RICH states: offline account with a seeded
+  // library, the card-preview state, and the EMPTY-library state (second
+  // seeded account). 900x600 = minimum, 1600x500 = ultra-flat.
   test('identity studio: rich library + preview states stay clean', async () => {
     const ta = await launchTestApp({ seed: seedIdentityProfile });
     try {
@@ -409,6 +418,21 @@ test.describe('layout integrity (overflow law)', () => {
         expect(
           (await ta.window.evaluate(LAYOUT_AUDIT)).problems,
           `${size.w}x${size.h} identity preview`,
+        ).toEqual([]);
+
+        // State 3: the empty-library account — no cards, no preview, the
+        // offline explainer text and the shelf's lone "+ add" invitation.
+        const nextAccount = await ta.window.evaluate(() => {
+          const btn = document.querySelector('button[aria-label="Next account"]');
+          if (!btn) return false;
+          btn.click();
+          return true;
+        });
+        expect(nextAccount, 'next-account arrow exists (2 seeded accounts)').toBe(true);
+        await ta.window.waitForTimeout(1000);
+        expect(
+          (await ta.window.evaluate(LAYOUT_AUDIT)).problems,
+          `${size.w}x${size.h} identity empty-library`,
         ).toEqual([]);
       }
     } finally {

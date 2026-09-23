@@ -58,3 +58,41 @@ Identity had its own measured problems, invisible to the pass-1 audit because of
 ## Baseline (unchanged or better)
 
 267/267 unit · typecheck ✓ · build ✓ · 17/17 E2E (incl. the layout-integrity gate with Identity Studio states).
+
+## Pass 3 — Identity Studio hero slot elasticity (measured to the pixel)
+
+Pass 2 shipped the hero at a definite 300px and called the ~230px minimum-window scroll structural. That was wrong — the scroll was elastic space being wasted, and the brief demanded the hero slot shrink. Making it shrink surfaced **three distinct flexbox traps, each measured live via DOM probes before the fix was understood**:
+
+| # | Attempt | Why it did nothing (measured) |
+|---|---|---|
+| 1 | definite `h-[300px]` (pass 2) | a definite height IS the parent column's content minimum; flex shrink can never move it |
+| 2 | `basis-[300px] min-h-[150px]` | Chromium computes a nested flex column's min-content from the item's **flex base size** — the automatic minimum stayed 300 regardless of min-h |
+| 3 | in-flow canvas wrapper | the canvas has an intrinsic attribute height (300), so even with a flex-basis slot the min-content contribution stayed 300; the shrink space never opened |
+
+### The fix
+
+The slot is now **growth-based**: `flex-1 min-h-[110px] max-h-[300px]` (basis 0), and the canvas wrapper is `absolute inset-0` inside the relative slot — out of flow, zero min-content contribution. The hero column keeps `min-height: auto` (its content minimum = labels + 110 is the real floor; the pass-2 lesson about min-h-0 still holds) and takes `flex-1 max-h-[400px]` of the root's vertical free space, so tall windows keep today's exact rhythm (shelf right under the content, void below). The canvas fills the slot's flexed height via SkinViewerCanvas's own ResizeObserver — fx/ untouched. Strip/hairline/shelf are `shrink-0` terminal chrome. Root scroller remains the final fallback: at 900×600 and 1600×600, the richest state keeps a **22px** graceful scroll (down from ~236px in pass 2), with every interactive element hit-testable (audit 0 problems / 72 screens).
+
+### Measurement corrections made along the way
+
+- The floor went 150 → **110** after measuring: at 1600×600 a 150px floor still left a 53px root scroll (labels + shelf no longer fit under it).
+- Root padding `py-6` → `py-4`; shelf-section labels `mb-3` → `mb-2` — each change validated by re-running the audit, not by eye.
+
+### The gate after pass 3
+
+- `tests/e2e/layout-integrity.spec.ts` identity test now walks rich → preview → **empty-library** (second seeded account via the account-switch arrow) at 900×600 and 1600×500.
+
+### E2E suite isolation (found by the identity test, fixed for everyone)
+
+The new empty-state step failed because the harness's `--user-data-dir` flag was being **silently overridden** by the app's userData pin (`index.ts:62` → `%APPDATA%/mu-master-launcher`). Every E2E test had been running against the developer's real profile: the seed wrote 2 accounts, the app read 1 (measured via IPC probe). Fixes:
+
+1. `src/main/index.ts` — the userData pin now applies **only when no explicit `--user-data-dir` was passed**. Production behavior unchanged (production never passes the flag).
+2. `tests/e2e/harness.ts` — deterministic default seed: a single active offline account (`e2e-tester`), so boot reaches "Ready." identically on any machine. Before, `Ready.` depended on the developer's live login. Supports `seed:` and `userDataDir:` (shared-profile boots for multi-app tests); cleanup only wipes dirs it owns.
+3. `tests/e2e/oracle-recovery.spec.ts` — `worldRoot()` hardcoded `%APPDATA%/mu-master-launcher`; provision + observe apps now share one scratch user-data dir, crash files staged into the scratch profile.
+4. `tests/e2e/identity-library.spec.ts` — deleted its real-profile backup/restore dance (the spec's header literally documented the old pin bug); synthetic skins now seed the scratch dir.
+
+**No test touches the real user data anymore.**
+
+## Baseline after pass 3
+
+271/271 unit · typecheck ✓ · build ✓ · **17/17 E2E** (layout-integrity identity states × sizes included) · overflow audit 0 problems / 72 screens.

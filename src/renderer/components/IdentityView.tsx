@@ -654,9 +654,9 @@ const IdentityView: React.FC = () => {
     // py-6: the dock now lives in Layout's in-flow slot, so the old
     // pt-16/pb-24 floating-dock clearance is dead weight — at 900x600 it
     // alone pushed the hero 102px below the fold (measured: root sh 823).
-    <div className="relative z-[1] flex h-full flex-col items-center overflow-y-auto px-10 py-6">
+    <div className="relative z-[1] flex h-full flex-col items-center overflow-y-auto px-10 py-4">
       {/* ── Account strip — one quiet row, never a bordered block ────────── */}
-      <div className="rise d1 flex w-full max-w-[640px] items-center gap-3 py-2">
+      <div className="rise d1 flex w-full max-w-[640px] shrink-0 items-center gap-3 py-2">
         <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-line">
           <span className="text-[11px] font-semibold text-dim">
             {(activeAccount?.username ?? '·').charAt(0).toUpperCase()}
@@ -751,33 +751,52 @@ const IdentityView: React.FC = () => {
           </button>
         </div>
       </div>
-      <div className="hairline-t h-px w-full max-w-[640px]" />
+      <div className="hairline-t h-px w-full max-w-[640px] shrink-0" />
 
       {/* ── The hero — same game. different you. ──────────────────────────── */}
-      {/* min-height stays auto (NOT min-h-0): flex shrinks the elastic hero
-          down to the column's content minimum and then stops — below that
-          the root scroller takes over. With min-h-0 the column shrinks past
-          its content and the equip row spills out, covered by the shelf
-          (measured at 900x600 preview: equip hit by the shelf div). */}
-      <div className="rise d2 flex w-full max-w-[640px] flex-col items-center pt-4">
+      {/* The column absorbs the root's vertical free space (flex-1, capped at
+          400px so tall windows keep today's exact rhythm: shelf right under
+          the content, void below). Its min-height stays AUTO — that content
+          minimum is the real floor, and with the slot below yielding to 110
+          it equals labels + 110, so the equip row can never spill under the
+          shelf (the pass-2 min-h-0 failure mode). */}
+      <div className="rise d2 flex max-h-[400px] w-full max-w-[640px] flex-1 flex-col items-center pt-4">
         <p className="microlabel mb-2">Identity Studio</p>
         <p className="text-[13px] text-dim">same game. different you.</p>
 
-        {/* Hero slot stays a definite 300px: the window floor is 600 tall
-            (main/index.ts minHeight), so vh-style elasticity can never
-            engage, and min-height tricks on a definite height don't change
-            the parent's content minimum. Short-window overflow is handled
-            by the root scroller (audit-verified: everything reachable,
-            nothing covered). */}
-        <div className="relative mt-2 h-[300px] w-[200px]">
-          <SkinViewerCanvas
-            key={mirrorEpoch}
-            skinUrl={heroUrl}
-            model={heroModel}
-            interactive
-            onOrbitStart={handleOrbitStart}
-            materializeScale={materialize ? materializeScale : 1}
-          />
+        {/* Hero slot is elastic: grows from the 110px floor up to a 300px
+            cap, taking whatever vertical space the window grants. Three
+            flexbox traps are documented here because all were measured live
+            (scripts/tmp-hero-probe.mjs):
+            1. A definite h-[300px] (pass 2) defines the parent's content
+               minimum — flex shrink can never move it.
+            2. flex-basis 300px is just as inert: Chromium computes the
+               column's min-content from the item's flex base size, so the
+               automatic minimum stayed 300 regardless of min-h-[150px].
+            3. The canvas has an INTRINSIC attribute height — in-flow it
+               would contribute 300 to min-content by itself. Its wrapper is
+               therefore absolutely positioned inside the (relative) slot:
+               out of flow, zero min-content contribution.
+           The growth-based slot (basis 0, min 110, max 300) makes the
+           column's content minimum = labels + 110, so short windows shrink
+           the hero 300 → 110 before the root scroller takes the remainder;
+           the floor keeps the materialize ceremony from collapsing the
+           hero mid-climb. (110 was lowered from the first draft's 150
+           after measuring: at 1600x600 the 150 floor still left a 53px
+           root scroll — labels + shelf no longer fit under it.)
+           The canvas fills the slot's flexed height via SkinViewerCanvas's
+           own ResizeObserver — fx/ untouched. */}
+        <div className="relative mt-2 min-h-[110px] w-[200px] max-h-[300px] flex-1">
+          <div className="absolute inset-0">
+            <SkinViewerCanvas
+              key={mirrorEpoch}
+              skinUrl={heroUrl}
+              model={heroModel}
+              interactive
+              onOrbitStart={handleOrbitStart}
+              materializeScale={materialize ? materializeScale : 1}
+            />
+          </div>
           {showDragHint && heroUrl !== undefined && (
             <p className="pointer-events-none absolute -bottom-1 left-1/2 -translate-x-1/2 text-[11px] text-faint transition-opacity duration-300">
               drag to rotate
@@ -909,9 +928,12 @@ const IdentityView: React.FC = () => {
       </div>
 
       {/* ── The shelf — horizontal wardrobe rail ─────────────────────────── */}
-      <div className="rise d3 mt-6 w-full max-w-[640px]">
-        <div className="hairline-t mb-3 h-px" />
-        <p className="microlabel mb-3">your library</p>
+      {/* shrink-0: the shelf is terminal chrome — its height is fixed
+          content, never a shrink donor. Horizontal overflow stays on its
+          own overflow-x-auto rail (scroll-reachable, audited). */}
+      <div className="rise d3 mt-6 w-full max-w-[640px] shrink-0">
+        <div className="hairline-t mb-2 h-px" />
+        <p className="microlabel mb-2">your library</p>
 
         {skinsLoading ? (
           <div className="flex items-center justify-center gap-2.5 py-8">

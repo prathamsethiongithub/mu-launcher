@@ -59,7 +59,14 @@ let pendingSkinPath: string | null = null;
 // from %APPDATA%/mu-master-launcher to %APPDATA%/ember-launcher —
 // orphaning every account, world and skin on first launch. Pin the path
 // to the historical directory: zero migration risk, invisible to users.
-app.setPath('userData', join(app.getPath('appData'), 'mu-master-launcher'));
+// Exception: an explicit --user-data-dir (used by the E2E harness and
+// probes to seed deterministic state) must win — before this guard the
+// pin OVERRODE the flag, so every seeded E2E silently ran against the
+// developer's real profile (measured: harness seed wrote 2 accounts,
+// the app read 1).
+if (!process.argv.some((arg) => arg.startsWith('--user-data-dir='))) {
+  app.setPath('userData', join(app.getPath('appData'), 'mu-master-launcher'));
+}
 
 // The console service — created AFTER the userData anchor so its session
 // logs land in mu-master-launcher/logs, not the pre-rename ember-launcher
