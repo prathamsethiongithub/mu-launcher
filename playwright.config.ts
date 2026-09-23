@@ -8,7 +8,10 @@ import { defineConfig } from 'playwright/test';
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 60_000,
-  globalTimeout: 5 * 60_000,
+  // 5 min covered the original 17-test smoke floor; the persona suite adds
+  // five full app boots (heavy seeds, CPU throttling, network phases) — 12
+  // min keeps the whole e2e gate inside CI without masking a hang.
+  globalTimeout: 12 * 60_000,
   fullyParallel: false,
   workers: 1,
   retries: 0,

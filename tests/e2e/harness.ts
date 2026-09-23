@@ -62,6 +62,16 @@ export async function launchTestApp(opts?: {
    *  Cleanup will NOT wipe it — the caller owns its lifecycle. Lets two
    *  app boots share one profile (provision in #1, observe in #2). */
   userDataDir?: string;
+  /** Extra Electron launch args (persona sandboxes: --use-gl=swiftshader,
+   *  window sizing, ...). Appended after the mandatory --user-data-dir. */
+  args?: string[];
+  /** Runs right after the Electron process starts, BEFORE the main window is
+   *  resolved. Persona hooks live here (e.g. patching globalThis.fetch in
+   *  the main process for network-fault injection — test-side only). */
+  onLaunched?: (app: ElectronApplication) => Promise<void>;
+  /** Launch timeout for the Electron process itself (default 30s). The
+   *  main-window wait stays 35s on top of this. */
+  launchTimeoutMs?: number;
 }): Promise<TestApp> {
   const scratchDir = opts?.userDataDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'ember-e2e-'));
   const ownsDir = !opts?.userDataDir;
@@ -77,9 +87,12 @@ export async function launchTestApp(opts?: {
     seedDefaultOfflineAccount(scratchDir);
   }
   const app = await _electron.launch({
-    args: ['out/main/index.js', `--user-data-dir=${scratchDir}`],
-    timeout: 30_000,
+    args: ['out/main/index.js', `--user-data-dir=${scratchDir}`, ...(opts?.args ?? [])],
+    timeout: opts?.launchTimeoutMs ?? 30_000,
   });
+  if (opts?.onLaunched) {
+    await opts.onLaunched(app);
+  }
   // The app boots through a splash/intro-video window that CLOSES itself on
   // handoff — firstWindow() can return that dying window. Wait for the real
   // main window: the one whose URL is the renderer's index.html.
@@ -114,7 +127,7 @@ export async function launchTestApp(opts?: {
       try { fs.rmSync(scratchDir, { recursive: true, force: true }); } catch { /* best effort */ }
     }
   };
-  return { app, window, scratchDir, cleanup, consoleCapture: consoleCapture } as TestApp & {
+  return { app, window, scratchDir, cleanup, consoleCapture } as TestApp & {
     consoleCapture: ConsoleCapture;
   };
 }
