@@ -162,6 +162,18 @@ const SkinViewerCanvas: React.FC<SkinViewerProps> = ({
       zoom: STAGE_LIGHT_CONFIG.stageZoom,
     });
     viewerRef.current = viewer;
+    // STRUCTURAL INVARIANT: the canvas CSS box is always exactly the
+    // wrapper's box (h-full/w-full). skinview3d's constructor just wrote
+    // inline px from the width/height measured above — but a mount observed
+    // mid-layout (keep-alive remount, 150-card shelf hydration, CPU
+    // throttling) measures a TRANSIENT box, and those inline px then outlive
+    // it, letting the canvas dangle over content below it (caught by the
+    // mod-hoarder layout audit as `covered: equip by CANVAS`). Pinning 100%
+    // binds the paint box to whatever the wrapper actually is; the
+    // ResizeObserver below still drives the BACKING STORE to the measured
+    // size. Same pin the materialize path applies after every setSize.
+    canvas.style.width = '100%';
+    canvas.style.height = '100%';
     // Diagnostic handle — required by the mu-verify CDP harness
     // (anim-diag.mjs exits without it; there is no DOM path to the
     // SkinViewer/three.js instances). Kept intentionally.
@@ -251,6 +263,10 @@ const SkinViewerCanvas: React.FC<SkinViewerProps> = ({
       }
       viewer.width = wrapRef.current.clientWidth;
       viewer.height = wrapRef.current.clientHeight;
+      // Re-pin the CSS box: setSize() wrote fresh inline px from the
+      // measurement; the box must stay 100% (see the constructor invariant).
+      canvas.style.width = '100%';
+      canvas.style.height = '100%';
     });
     ro.observe(wrap);
 
