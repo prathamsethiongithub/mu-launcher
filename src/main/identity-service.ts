@@ -8,6 +8,7 @@ import { Auth, Xbox, Minecraft } from 'msmc';
 // MODULE_NOT_FOUND. That silent throw was why every skin came back null.
 import { SkinService } from './skin-service';
 import type { Account, Session, SkinProfile, IdentityState } from '../shared/types';
+import { normalizeIdentityState } from './identity-state';
 
 const IDENTITY_FILE = 'identity.json';
 const TOKENS_FILE = 'identity-tokens.bin';
@@ -575,7 +576,13 @@ export class IdentityService {
     if (existsSync(this.statePath)) {
       try {
         const raw = readFileSync(this.statePath, 'utf-8');
-        return JSON.parse(raw) as IdentityState;
+        // Legal-JSON-wrong-shape files (accounts missing, sessions garbage,
+        // activeAccountId pointing nowhere) must normalize to a known-good
+        // state — letting them through verbatim made every account IPC throw
+        // (get-accounts → .map on undefined) and the malformed file stuck
+        // forever via saveState(). Mirror of world-manager/skin-library's
+        // recover-to-known-good posture.
+        return normalizeIdentityState(JSON.parse(raw));
       } catch {
         // Corrupt — start fresh
       }
