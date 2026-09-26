@@ -147,7 +147,19 @@ function parsePngPixels(buf: Buffer): DecodedPng | null {
     off += 12 + len;
   }
   if (!width || !height || (colorType !== 6 && colorType !== 2)) return null;
-  const raw = inflateSync(Buffer.concat(idat));
+  // RED-TEAM HARDENED (wave 2, B2): a hostile "skin" can declare legal 64×64
+  // dimensions while its IDAT inflates to gigabytes — the original
+  // inflateSync materialized the whole output in the main process (measured:
+  // 65KB file → 64MB buffer). Bound the output to what a real 4K-class
+  // texture could ever need; overflow throws and the import degrades to
+  // 'classic' — never a memory bomb.
+  const MAX_INFLATED = 4 * 1024 * 1024;
+  let raw: Buffer;
+  try {
+    raw = inflateSync(Buffer.concat(idat), { maxOutputLength: MAX_INFLATED });
+  } catch {
+    return null;
+  }
   const bpp = colorType === 6 ? 4 : 3;
   const stride = width * bpp;
   const out = Buffer.alloc(width * height * 4);
