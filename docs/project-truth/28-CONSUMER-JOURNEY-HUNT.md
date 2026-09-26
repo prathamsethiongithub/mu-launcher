@@ -29,7 +29,7 @@
 
 Java provisioning is ~9s; the other ~2.5 minutes are MCLC version/assets/libraries downloads on real Mojang egress.
 
-> **Follow-up task suggestion (recorded, NOT fixed — journey #4 is measurement-only):** first-boot copy should set expectations — at >150s the user stares at a progress line with no sense of the total. A "first launch downloads ~X MB, takes a few minutes" line (or a bytes-progress figure) during the MCLC phase is the cheap honest fix. First-time UX bug triage belongs to a dedicated task, not to a hunt whose contract is zero production change.
+> **Follow-up task suggestion (recorded, NOT fixed — journey #4 is measurement-only):** first-boot copy should set expectations — at >150s the user stares at a progress line with no sense of the total. A "first launch downloads ~X MB, takes a few minutes" line (or a bytes-progress figure) during the MCLC phase is the cheap honest fix. Tone example (user's ear, matches the launcher's lowercase voice): "first time takes a few minutes. it's worth it." First-time UX bug triage belongs to a dedicated task, not to a hunt whose contract is zero production change.
 
 ## Test-side defects found and fixed (the hunt's own snares — zero production change)
 
