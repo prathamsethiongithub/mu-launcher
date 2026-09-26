@@ -50,6 +50,12 @@ let skinLibrary: SkinLibrary | null = null;
 // the assignment (whenReady / IPC handlers), so the assertion is sound.
 let consoleService!: ConsoleService;
 let launchInProgress = false;
+
+/** RED-TEAM A5b custody registry: settings folders picked through the real
+ *  'select-directory' dialog this session. 'create-world' consumes a
+ *  settingsPath ONLY if it appears here — a renderer-crafted absolute path
+ *  (arbitrary-file-read primitive) is refused at the bridge. */
+const pendingSettingsPaths = new Set<string>();
 // Skin file chosen via the main-process dialog. Uploads read this — the
 // renderer never supplies (or sees) a filesystem path.
 let pendingSkinPath: string | null = null;
@@ -926,6 +932,10 @@ function registerIpcHandlers(): void {
       ? await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'] })
       : await dialog.showOpenDialog({ properties: ['openDirectory'] });
     if (result.canceled) return null;
+    // RED-TEAM custody registry (A5b): only paths returned here may later be
+    // consumed by 'create-world' as settingsPath. The set is bounded — stale
+    // entries are harmless (the worst case is one legal re-pick).
+    pendingSettingsPaths.add(result.filePaths[0]);
     return result.filePaths[0];
   });
 
@@ -953,6 +963,18 @@ function registerIpcHandlers(): void {
     const supportedLoaders: readonly string[] = ['vanilla', 'fabric', 'quilt', 'forge', 'neoforge'];
     if (!supportedLoaders.includes(spec.loader)) {
       return { success: false, error: 'Unsupported loader. Use vanilla, fabric, quilt, forge, or neoforge.' };
+    }
+    // RED-TEAM HARDENED (wave 1, A5b): settingsPath is only ever produced by
+    // the main-side 'select-directory' picker — a renderer-supplied absolute
+    // path to ANY location would turn createWorld's settings import into an
+    // arbitrary-file-read primitive (proven by the redteam custody probe).
+    // The custody model matches select-skin-file: the renderer may only name
+    // a path the main process itself registered this session.
+    if (spec.settingsPath !== undefined) {
+      const registered = typeof spec.settingsPath === 'string' && pendingSettingsPaths.has(spec.settingsPath);
+      if (!registered) {
+        return { success: false, error: 'Invalid settings folder. Pick it again with the folder chooser.' };
+      }
     }
     const world = worldManager.createWorld({
       name: spec.name,
