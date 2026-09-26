@@ -1,20 +1,20 @@
 {
-  "measuredAt": "2026-09-26T08:30:57.544Z",
+  "measuredAt": "2026-09-26T10:58:10.681Z",
   "segments": [
     {
       "segment": "play-click→java",
-      "ms": 7956
+      "ms": 10901
     },
     {
       "segment": "play-click→launch",
-      "ms": 180420
+      "ms": 182770
     },
     {
       "segment": "play-click→game-proc",
-      "ms": 180420
+      "ms": 182770
     }
   ],
-  "total": 180420,
+  "total": 182770,
   "overBudget": true,
   "notes": "Clean-profile first Play on the real chain (real Mojang egress). play-click→game-proc = launch-game resolution (MCLC spawn). Recorded for truth doc 28; >90s ⇒ follow-up: first-boot copy should set expectations."
 }
