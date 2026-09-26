@@ -54,3 +54,13 @@ Diagnostic probes used during the hunt were removed after their findings were re
 ## Gates
 
 Unit **281/281** (274 baseline + 7 tray-timers), E2E **30/30** (22 baseline + 8 journey), typecheck + build clean. `playwright.config.ts` globalTimeout 12→20 min (journey adds eight more full boots: three SIGKILL respawn chains ×2 boots each + one real-egress first-Play measurement).
+
+## 狩猎结论 (final hunt verdict)
+
+**Certified 2026-09-26 — the hunt is closed.**
+
+- **Prey #1 — app exonerated, SIGKILL certification PASSED.** Evidence chain: probe v7 (real worldId resolved via `getWorlds`, awaited IPC) proved bytes flow and `success:true` lands `journey-mod.jar` on disk via tmp→rename; path alignment is code-proven (`createWorld` rootPath = `{userData}/worlds/<id>/minecraft` — the same tree the test scans); the old "0-byte stall" was the fake-worldId probe's artifact, and the old three-kill red was the 250ms drip-math snare. With every snare removed, all three kill points went green in the final certification run: SIGKILL at ~30/60/90% body → respawn healthy → retry completes. **3/3 passed — zero production change.**
+- **Prey #4 — measurement is real, not a bug.** Four clean-profile runs on the real Mojang egress: 193.6s / 158.4s / 180.4s / 182.8s. `journey-first-boot.json` refreshed with the latest run (182,770 ms total; play-click→java 10,901 ms — the rest is MCLC version/assets/libraries download). **Follow-up task (recorded, not fixed): first-boot expectation-setting copy** — an honest "first time takes a few minutes. it's worth it."-style line during the MCLC phase.
+- **Snare ledger (all test-side, all fixed):** fake worldId `PENDING` probe (invalid evidence, not app evidence) / 250ms drip math (90% kill point unsatisfiable by construction) / sandbox `window.close()` ignored (must fire main-side `BrowserWindow.close()`) / un-awaited `browserWindow()` Promise. **Zero production files touched across the entire hunt.**
+
+Final gates at close: unit **281/281**, E2E **30/30** (incl. journey three-kill 3/3), typecheck + build clean.
