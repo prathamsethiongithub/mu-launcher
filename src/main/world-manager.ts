@@ -1,5 +1,5 @@
 import { app } from 'electron';
-import { join } from 'path';
+import { join, sep } from 'path';
 import * as os from 'node:os';
 import {
   existsSync,
@@ -713,8 +713,29 @@ export class WorldManager {
   /**
    * Resolve a world's rootPath template to an absolute filesystem path.
    * Supports {userData} placeholder.
+   *
+   * RED-TEAM HARDENED (wave 2, B1): rootPath is registry data — registry
+   * data is attacker-controllable (a hand-edited or corrupt worlds.json
+   * must never steer writes outside the user-data sandbox). Resolution is
+   * therefore CONFINED: the joined path must stay inside userData. Any
+   * escape (`..` segments, surrogate tricks) resolves to the managed
+   * default root instead. Legal template output is byte-identical to the
+   * pre-hardening join (verified by redteam + baseline suites).
    */
   resolveRoot(world: World): string {
+    const base = app.getPath('userData');
+    const raw = this.rawRoot(world);
+    if (!raw.startsWith(base + sep)) {
+      console.error(
+        `[worlds] rootPath "${world.rootPath}" escapes the user-data sandbox — confining to the managed root`,
+      );
+      return join(base, 'minecraft');
+    }
+    return raw;
+  }
+
+  /** Unconfined template resolution — used ONLY to DETECT escapes (validation). */
+  private rawRoot(world: World): string {
     const base = app.getPath('userData');
     const relative = world.rootPath.replace('{userData}', '');
     return join(base, relative);
@@ -864,10 +885,25 @@ export class WorldManager {
       changed = true;
     }
 
-    // 2. Validate activeWorldId.
-    const activeExists = reg.activeWorldId && reg.worlds.some((w) => w.id === reg.activeWorldId);
-    if (!activeExists) {
-      console.warn(`[worlds] Active world "${reg.activeWorldId}" not found — falling back to managed`);
+    // 1c. Confinement quarantine (red-team B1): a registry entry whose
+    // rootPath escapes the user-data sandbox is CORRUPT data — it must
+    // never become the launch root. resolveRoot confines resolution as
+    // belt; this pass repairs the REGISTRY as suspenders, so the UI shows
+    // the truth (broken) instead of silently redirecting.
+    for (const world of reg.worlds) {
+      const legal = this.rawRoot(world).startsWith(app.getPath('userData') + sep);
+      if (!legal && !world.broken) {
+        console.error(`[worlds] World "${world.name}" rootPath escapes the sandbox — quarantining`);
+        world.broken = true;
+        changed = true;
+      }
+    }
+
+    // 2. Validate activeWorldId. A broken world is equally unusable — an
+    // active-but-broken id would put every launch/mutation on a dead root.
+    const activeWorld = reg.worlds.find((w) => w.id === reg.activeWorldId);
+    if (!activeWorld || activeWorld.broken) {
+      console.warn(`[worlds] Active world "${reg.activeWorldId}" unusable — falling back to managed`);
       reg.activeWorldId = MANAGED_WORLD_ID;
       changed = true;
     }
