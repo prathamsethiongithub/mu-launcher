@@ -12,7 +12,7 @@
  * A diagnostician that crashes itself is worse than no diagnostician.
  */
 
-import { readdirSync, readFileSync, statSync } from 'fs';
+import { closeSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'fs';
 import { join } from 'path';
 
 export interface CrashDiagnosis {
@@ -24,8 +24,23 @@ export interface CrashDiagnosis {
 
 /** Only the head of the report is parsed — enough for the cause, and it
  *  keeps a multi-megabyte pathological report from stalling the main
- *  process on a synchronous read. */
+ *  process on a synchronous read.
+ *
+ *  RED-TEAM HARDENED (wave 2, B3): the original read the WHOLE file into
+ *  memory synchronously and only then sliced — a 100MB forged crash
+ *  report froze the main process for the entire read. The head is now
+ *  read with a bounded length (256KB ceiling: 5,000 chars of text lives
+ *  well inside it even on CRLF/spaced reports) and sliced after.
+ *
+ *  RED-TEAM HONESTY CONTRACT (wave 2, B3): attribution is only DELIVERED
+ *  when the accused mod actually exists in the world's mods/ directory.
+ *  A forged report (or one naming an uninstalled mod) still reports the
+ *  crash honestly but refuses to slander a mod that isn't there —
+ *  `modName` degrades to undefined and the reason stays. */
 const HEAD_LIMIT = 5000;
+
+/** Bounded byte ceiling for the synchronous read (see RED-TEAM note). */
+const READ_CEILING = 256 * 1024;
 
 /** Well-known package roots that are the GAME or its standard libraries,
  *  not mods. Any stack frame outside these is a mod suspect. */
@@ -69,7 +84,16 @@ export async function diagnoseLastCrash(worldRootPath: string): Promise<CrashDia
 
     let head: string;
     try {
-      head = readFileSync(join(reportsDir, newestName), 'utf8').slice(0, HEAD_LIMIT);
+      // Bounded read: never pull a hostile multi-MB file into the main
+      // process whole. The buffer is sliced to text after the disk work.
+      const fd = openSync(join(reportsDir, newestName), 'r');
+      try {
+        const buf = Buffer.alloc(Math.min(READ_CEILING, statSync(join(reportsDir, newestName)).size));
+        const read = readSync(fd, buf, 0, buf.length, 0);
+        head = buf.subarray(0, read).toString('utf8').slice(0, HEAD_LIMIT * 4);
+      } finally {
+        closeSync(fd);
+      }
     } catch {
       // The report exists but can't be read — still a confirmed crash,
       // just an unattributed one.
@@ -79,9 +103,14 @@ export async function diagnoseLastCrash(worldRootPath: string): Promise<CrashDia
     const modName = detectModName(head);
     const reason = detectReason(head);
 
+    // Honesty gate: only accuse a mod that is ACTUALLY INSTALLED in this
+    // world. The report text is attacker-writable — "Mixin apply failed:
+    // innocent.mixins.json" alone must never put a name on the screen.
+    const verifiedMod = verifyInstalledMod(worldRootPath, modName);
+
     return {
       crashed: true,
-      modName,
+      modName: verifiedMod,
       reason: reason ?? 'Unknown crash',
       crashTime,
     };
@@ -179,6 +208,31 @@ export function detectModName(head: string): string | undefined {
   }
 
   return undefined;
+}
+
+/**
+ * RED-TEAM honesty gate: confirm the accused mod is actually installed.
+ * Matching is case-insensitive on the mod id appearing in a jar filename
+ * (sodium.mixins.json → mods/sodium-0.5.3.jar). No mods dir / no match →
+ * undefined (the crash stays, the slander goes).
+ */
+function verifyInstalledMod(worldRootPath: string, modName: string | undefined): string | undefined {
+  if (!modName) return undefined;
+  try {
+    const modsDir = join(worldRootPath, 'mods');
+    const jars = readdirSync(modsDir).filter((f) => f.toLowerCase().endsWith('.jar'));
+    if (jars.length === 0) return undefined;
+    const needle = modName.toLowerCase().replace(/[\s_-]+/g, '');
+    if (!needle) return undefined;
+    const hit = jars.some((f) => {
+      const stem = f.replace(/\.jar$/i, '').replace(/-[\d][\w.]*$/, ''); // strip version tail
+      return stem.toLowerCase().replace(/[\s_-]+/g, '') === needle;
+    });
+    return hit ? modName : undefined;
+  } catch {
+    // Cannot verify (no mods dir, unreadable) → refuse to accuse.
+    return undefined;
+  }
 }
 
 /** "sodium" → "Sodium"; "sodium-extra" → "Sodium Extra". */

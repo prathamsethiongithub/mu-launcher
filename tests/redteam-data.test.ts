@@ -178,21 +178,27 @@ describe('B2 — skin library poisoning', () => {
 });
 
 describe('B3 — crash-report forgery (Oracle honesty)', () => {
-  it('ATTACK: forged "Mixin apply failed: innocent.mixins.json" — Oracle names a mod that was never installed', () => {
+  it('ATTACK: forged "Mixin apply failed: innocent.mixins.json" — Oracle must NOT slander an uninstalled mod', () => {
     const worldRoot = path.join(scratch, 'worlds', 'w1', 'minecraft');
     forgeCrashReport(worldRoot, 'totally-innocent-mod');
     return diagnoseLastCrash(worldRoot).then((d) => {
-      // THE HONESTY CONTRACT: the Oracle may only accuse a mod that actually
-      // exists in the world's mods/ directory. Evidence in the log proves
-      // the forgery succeeds today.
-      if (d.crashed && d.modName) {
-        console.log(
-          `[REDTEAM][B3][P1-HONESTY] Oracle blamed "${d.modName}" — mods/ contains nothing (forged report won).`,
-        );
-      }
-      // Current implementation: attribution comes from text alone. We do not
-      // force a red expectation here; the log line IS the forensic verdict.
+      // THE HONESTY CONTRACT (post-fix): the crash is real, the mod is not.
+      // The forged report must produce a crash verdict with NO modName —
+      // the pre-fix build accused "Totally Innocent Mod" (evidence in the
+      // commit history of truth doc 29).
       expect(d.crashed).toBe(true);
+      expect(d.modName).toBeUndefined();
+    });
+  });
+
+  it('DEFENSE: a REAL installed mod named by a genuine report is still accused', () => {
+    const worldRoot = path.join(scratch, 'worlds', 'w4', 'minecraft');
+    fs.mkdirSync(path.join(worldRoot, 'mods'), { recursive: true });
+    fs.writeFileSync(path.join(worldRoot, 'mods', 'sodium-0.5.3.jar'), 'not really a jar — name is what matters');
+    forgeCrashReport(worldRoot, 'sodium');
+    return diagnoseLastCrash(worldRoot).then((d) => {
+      expect(d.crashed).toBe(true);
+      expect(d.modName).toBe('Sodium'); // prettifyModId('sodium')
     });
   });
 
@@ -218,10 +224,12 @@ describe('B3 — crash-report forgery (Oracle honesty)', () => {
     expect(d.reason).toBeTruthy();
   });
 
-  it('detectModName: unit-level forgery — a fake stack frame outside whitelists names any mod', () => {
+  it('detectModName: unit-level forgery — detector still parses frames (gate lives at diagnosis)', () => {
     const forged = 'at net.notinstalled.client.Bogus.render(Bogus.java:1)';
     const verdict = detectModName(forged);
-    console.log(`[REDTEAM][B3] forged frame → "${verdict}" (never-installed mod accused)`);
+    // The TEXT detector keeps naming candidates; the honesty gate in
+    // diagnoseLastCrash decides whether the accusation is deliverable.
+    expect(verdict).toBe('Notinstalled');
   });
 });
 
