@@ -72,7 +72,8 @@ interface ElectronAPI {
     checks: { name: string; passed: boolean; message?: string }[];
   }>;
 
-  launchGame: (javaPath: string) => Promise<{ success: boolean; error?: string }>;
+  /** `notice` carries a one-time, already-applied adjustment (RAM guard). */
+  launchGame: (javaPath: string) => Promise<{ success: boolean; error?: string; notice?: string }>;
   /** PoC: Launch Minecraft from an isolated root directory. */
   launchPoc: (javaPath: string, root: string) => Promise<{ success: boolean; error?: string }>;
   /** Fetch a version manifest via the main process (bypasses renderer CSP). */

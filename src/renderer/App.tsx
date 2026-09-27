@@ -106,6 +106,10 @@ function App() {
   const [launchError, setLaunchError] = useState<string | null>(null);
   const [launchSteps, setLaunchSteps] = useState<LaunchStep[]>([]);
   const [isRunning, setIsRunning] = useState(false);
+  // One-time RAM-guard notice: set only when the main process actually adjusted
+  // this world's allocation. Cleared when the next launch attempt starts, so it
+  // can never read as a live state.
+  const [memoryNotice, setMemoryNotice] = useState<string | null>(null);
   const launchingRef = useRef(false);
   // True while the user has asked to abandon the in-flight launch. A cancel
   // settles the launch promise by REJECTING it (launch-service's stall-race
@@ -250,6 +254,7 @@ function App() {
 
     setLaunching(true);
     setLaunchError(null);
+    setMemoryNotice(null);
     setIsRunning(false);
     setLaunchSteps(
       ALL_STEPS.map((s) => ({ step: s, label: STEP_LABELS[s] || s, status: 'pending' as const }))
@@ -271,6 +276,9 @@ function App() {
       if (!result.success) {
         throw new Error(result.error || 'Launch failed');
       }
+      // The main process may have adjusted memory for this machine. Surface it
+      // once, quietly — it is context, not an alarm.
+      if (result.notice) setMemoryNotice(result.notice);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Launch failed';
       // The user asked for this to stop. Return to the neutral state — a
@@ -382,6 +390,7 @@ function App() {
           worlds={worlds}
           onSetActiveWorld={handleSetActiveWorld}
           onOpenConsole={openConsole}
+          memoryNotice={memoryNotice}
         />
       </div>
       <div className="h-full" style={{ display: currentView === 'worlds' ? 'block' : 'none' }}>

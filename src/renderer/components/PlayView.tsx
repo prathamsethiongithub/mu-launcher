@@ -13,6 +13,7 @@ import MagicRings from './fx/MagicRings';
 // component is kept in the repo (fx/WorldBeacon.tsx) but no longer mounted.
 import { SMP_SERVER_HOST, SMP_SERVER_PORT } from '../../shared/constants';
 import { isOomReason, mapDiagnosisToActions, unmatchedModNote } from '../../shared/oracle-recovery';
+import { FIRST_BOOT_COPY, isFirstBoot } from '../../shared/first-boot';
 import type { InstalledMod, ModUpdateInfoLike, RecoveryAction } from '../../shared/oracle-recovery';
 
 // SideRays (React Bits, ogl — vendor-pristine, locked owner config) is the
@@ -54,6 +55,8 @@ interface PlayViewProps {
   activeWorld: WorldData | null;
   worlds: WorldData[];
   onSetActiveWorld: (id: string) => void;
+  /** One-time RAM-guard notice from the main process (already applied). */
+  memoryNotice?: string | null;
 }
 
 const STAGES = [
@@ -131,7 +134,7 @@ function activeStageLabel(steps: LaunchStep[]): string {
 
 const PlayView: React.FC<PlayViewProps> = ({
   launching, launchError, launchSteps, isRunning, onPlay, onRetry, onCancelLaunch,
-  activeWorld, worlds, onSetActiveWorld, onOpenConsole,
+  activeWorld, worlds, onSetActiveWorld, onOpenConsole, memoryNotice,
 }) => {
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
@@ -395,6 +398,15 @@ const PlayView: React.FC<PlayViewProps> = ({
         : isLoggedIn
           ? `The world is waiting${profileName ? `, ${profileName}` : ''}.`
           : 'Sign in with Microsoft to step into the SMP.';
+
+  // FIRST-CONTACT CONTEXT — shown only on a world that has never been launched,
+  // and only while idle. The measured first launch is 158–194s (truth doc 28);
+  // on a potato PC it runs past eight minutes. "Ready." is true, but it is not
+  // the whole truth, and the gap between the two is where trust dies. One
+  // static line closes it. Deliberately un-animated: it is context, not a
+  // feature, and anything that draws the eye would make the wait feel worse.
+  const showFirstBootNote =
+    isLoggedIn && !launching && !isRunning && !launchError && isFirstBoot(activeWorld);
 
   // The world's mood now lives INSIDE the scene (the atmosphere rides the
   // director's ignition ramp), so this view no longer computes a beacon state.
@@ -733,6 +745,22 @@ const PlayView: React.FC<PlayViewProps> = ({
             >
               <img src={new URL('../assets/enter-world-btn.png', import.meta.url).href} alt="" />
             </button>
+          )}
+
+          {/* Under the launch button — a promise about the wait, made before
+              the user pays it. Static, lowercase, and it never comes back
+              once lastPlayedAt is set. */}
+          {showFirstBootNote && (
+            <p className="mt-4 text-[12px] text-faint" data-testid="first-boot-note">
+              {FIRST_BOOT_COPY}
+            </p>
+          )}
+
+          {/* One-time, already-applied hardware adjustment. Not an alarm. */}
+          {memoryNotice && (
+            <p className="mt-2 text-[12px] text-faint" data-testid="memory-notice">
+              {memoryNotice}
+            </p>
           )}
         </div>
       </div>

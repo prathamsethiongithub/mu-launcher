@@ -14,6 +14,12 @@ import { WorldManager } from './world-manager';
 import { listMods, toggleMod, deleteMod, addMod } from './mod-manager';
 import { installModpackOverrides, installModpackFiles } from './modpack-installer';
 import { pingMinecraftServer } from './server-pinger';
+import {
+  DEFAULT_RAM_ALLOCATION_MB,
+  RAM_ADJUSTED_NOTICE,
+  readRamEnvironment,
+  suggestRamAdjustment,
+} from './ram-guard';
 import { initTray, disposeTray } from './tray-manager';
 import { diagnoseLastCrash } from './crash-diagnostic';
 import { checkForUpdates, performUpdate } from './update-checker';
@@ -800,7 +806,31 @@ function registerIpcHandlers(): void {
       // Memory: the active world's own allocation (Setup → Memory), not a
       // hardcoded default. Falls back to 4096 only if the registry value is
       // somehow missing.
-      const maxRam = String(activeWorld.ramAllocation || 4096);
+      //
+      // FIRST-CONTACT RAM GUARD: on a machine with less than 6 GB installed,
+      // the default 4 GB allocation is a promise the box cannot keep — the JVM
+      // thrashes or dies with an OutOfMemoryError the user cannot read. Adjust
+      // once, persist it, and say so in one honest line. The guard only ever
+      // moves a value the user never chose, so it cannot overrule a deliberate
+      // setting — and because persisting 2 GB makes the condition unrepeatable,
+      // it cannot fire twice either.
+      const ramEnv = readRamEnvironment();
+      const adjustedRam = suggestRamAdjustment({
+        ...ramEnv,
+        currentAllocationMb: activeWorld.ramAllocation || DEFAULT_RAM_ALLOCATION_MB,
+      });
+      let ramNotice: string | undefined;
+      if (adjustedRam !== null) {
+        worldManager?.updateWorldSettings(activeWorld.id, { ramAllocation: adjustedRam });
+        activeWorld.ramAllocation = adjustedRam;
+        ramNotice = RAM_ADJUSTED_NOTICE;
+        console.log(
+          `[ram-guard] total=${((ramEnv.totalMemBytes ?? 0) / 1024 ** 3).toFixed(1)}GB ` +
+            `free=${((ramEnv.freeMemBytes ?? 0) / 1024 ** 3).toFixed(1)}GB → ` +
+            `allocation ${adjustedRam}MB (was ${DEFAULT_RAM_ALLOCATION_MB}MB)`,
+        );
+      }
+      const maxRam = String(activeWorld.ramAllocation || DEFAULT_RAM_ALLOCATION_MB);
       // Resolution: the Setup screen's persisted "WxH" value drives the
       // game window flags via MCLC's `window` option. Absent or malformed →
       // no flags, the game uses its own default size.
@@ -811,7 +841,7 @@ function registerIpcHandlers(): void {
         if (m) windowOption = { width: Number(m[1]), height: Number(m[2]) };
       }
       await launchManager.launchWithFabric(auth, javaPath, { maxRam, minRam: '1024', window: windowOption }, mcRoot);
-      return { success: true };
+      return { success: true, notice: ramNotice };
     } catch (error) {
       console.error('[ipc-launch-error]', error);
       const message = error instanceof Error ? error.message : 'Launch failed';
