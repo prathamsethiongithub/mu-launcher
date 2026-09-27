@@ -1,6 +1,7 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import NewWorldDialog from './NewWorldDialog';
 import ModManagerModal from './ModManagerModal';
+import WorldShelf, { modStackSummary, worldAccent, type ShelfWorld } from './WorldShelf';
 
 interface WorldData {
   id: string;
@@ -23,6 +24,8 @@ interface WorldsViewProps {
   onWorldsChanged: () => void;
   /** Launch a world directly from the shelf. Omit to hide the Play buttons. */
   onPlayWorld?: (worldId: string) => void;
+  /** False while this view is hidden — parks the shelf's render loop. */
+  active?: boolean;
 }
 
 type HealthStatus = 'healthy' | 'warning' | 'corrupted';
@@ -67,8 +70,12 @@ const HEALTH_COLOR: Record<HealthStatus, string> = {
   corrupted: 'text-danger/60',
 };
 
-const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetActive, onWorldsChanged, onPlayWorld }) => {
+const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetActive, onWorldsChanged, onPlayWorld, active = true }) => {
   const [showNewDialog, setShowNewDialog] = useState(false);
+  // The shelf is the page; the flat list is the management drawer behind it.
+  const [showManage, setShowManage] = useState(false);
+  const [modStacks, setModStacks] = useState<Record<string, string>>({});
+  const [serverState, setServerState] = useState<Record<string, 'online' | 'offline' | 'none'>>({});
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [renameError, setRenameError] = useState<string | null>(null);
@@ -116,18 +123,68 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
         const backups = await window.electronAPI.getBackups(world.id);
         setBackupCounts((prev) => ({ ...prev, [world.id]: backups.length }));
       } catch { /* non-fatal */ }
+      try {
+        const mods = await window.electronAPI.listMods(world.id);
+        const enabled = mods
+          .filter((mod) => mod.enabled)
+          .map((mod) => mod.displayName || mod.filename.replace(/\.jar$/i, ''));
+        setModStacks((prev) => ({ ...prev, [world.id]: modStackSummary(enabled) }));
+      } catch { /* non-fatal */ }
+      // Live server status for the card's dot. Asked once per load, not polled.
+      if (world.assignedServer) {
+        const { ip, port } = world.assignedServer;
+        try {
+          const pulse = await window.electronAPI.pingServer(ip, port);
+          setServerState((prev) => ({ ...prev, [world.id]: pulse?.online ? 'online' : 'offline' }));
+        } catch {
+          setServerState((prev) => ({ ...prev, [world.id]: 'offline' }));
+        }
+      }
     }
   }, [worlds]);
 
   useEffect(() => { loadMetrics(); }, [worlds, loadMetrics]);
 
-  const sorted = [...worlds].sort((a, b) => {
-    if (a.type === 'managed' && b.type !== 'managed') return -1;
-    if (a.type !== 'managed' && b.type === 'managed') return 1;
-    const aTime = a.lastPlayedAt || 0;
-    const bTime = b.lastPlayedAt || 0;
-    return bTime - aTime;
-  });
+  const sorted = useMemo(
+    () => [...worlds].sort((a, b) => {
+      if (a.type === 'managed' && b.type !== 'managed') return -1;
+      if (a.type !== 'managed' && b.type === 'managed') return 1;
+      const aTime = a.lastPlayedAt || 0;
+      const bTime = b.lastPlayedAt || 0;
+      return bTime - aTime;
+    }),
+    [worlds]
+  );
+
+  // WorldData → the shelf's own vocabulary. Everything the card shows is a
+  // fact Ember already holds; nothing is invented for the display.
+  const shelfWorlds = useMemo<ShelfWorld[]>(
+    () =>
+      sorted.map((world) => ({
+        id: world.id,
+        title: world.name,
+        subtitle:
+          world.loader === 'vanilla'
+            ? `Minecraft ${world.version} · Vanilla`
+            : `Minecraft ${world.version} · Fabric ${world.loaderVersion}`,
+        coverImage: null,
+        accentColor: worldAccent(world.id),
+        metadata: {
+          version: world.version,
+          loader: world.loader === 'vanilla' ? 'Vanilla' : `Fabric ${world.loaderVersion}`,
+          ram: Math.round(world.ramAllocation / 1024),
+          modSummary: modStacks[world.id] || 'No mods',
+          lastPlayed: world.lastPlayedAt ? timeAgo(world.lastPlayedAt) : 'Never played',
+          server: world.assignedServer
+            ? `${world.assignedServer.ip}:${world.assignedServer.port}`
+            : null,
+          deck: world.broken ? 'This world needs repair before it will launch.' : '',
+        },
+        serverStatus: serverState[world.id] || 'none',
+        isActive: world.id === activeWorldId,
+      })),
+    [sorted, modStacks, serverState, activeWorldId]
+  );
 
   const handleRename = async (worldId: string) => {
     if (!renameValue.trim()) { setRenameError('Name cannot be empty.'); return; }
@@ -243,7 +300,7 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
 
   return (
     <div
-      className="relative z-[1] flex h-full flex-col items-center px-10 pt-20 pb-24"
+      className="relative z-[1] flex h-full flex-col items-center overflow-y-auto px-10 pt-20 pb-24"
       onDragOver={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -274,18 +331,45 @@ const WorldsView: React.FC<WorldsViewProps> = ({ worlds, activeWorldId, onSetAct
       }}
     >
       {/* Header */}
-      <div className="rise d1 mb-12 w-full max-w-[520px]">
+      <div className="rise d1 mb-6 w-full max-w-[520px]">
         <p className="microlabel mb-3">Worlds</p>
         <p className="text-[14px] text-dim">
           {worlds.length === 1
-            ? 'One world ready. Make a space of your own below.'
-            : `${worlds.length} worlds. The active one launches when you press Play.`}
+            ? 'One world on the shelf. Select it and press Play.'
+            : `${worlds.length} worlds on the shelf. The bright one is active.`}
         </p>
       </div>
 
+      {/* The World Shelf — an interactive 3D shelf of the same worlds. */}
+      <div className="rise d2 relative h-[54vh] min-h-[360px] w-full max-w-[1100px]">
+        {worlds.length === 0 ? (
+          <div className="flex h-full items-center justify-center">
+            <p className="text-[13px] text-faint">Nothing on the shelf yet. Create a world below.</p>
+          </div>
+        ) : (
+          <WorldShelf
+            worlds={shelfWorlds}
+            active={active}
+            onSelectWorld={onSetActive}
+            onPlayWorld={onPlayWorld}
+          />
+        )}
+      </div>
+
+      {/* Manage drawer — every action the shelf never had: rename, duplicate,
+          back up, restore, repair, the mod manager, and delete. */}
+      {worlds.length > 0 && (
+        <button
+          onClick={() => setShowManage((value) => !value)}
+          className="rise d3 mt-6 text-[12px] text-faint transition-colors duration-micro hover:text-dim"
+        >
+          {showManage ? 'Hide world list' : 'Manage worlds'}
+        </button>
+      )}
+
       {/* Shelf */}
-      <div className="rise d2 flex w-full max-w-[520px] flex-col">
-        {sorted.map((world, idx) => {
+      <div className="rise d2 mt-4 flex w-full max-w-[520px] flex-col">
+        {showManage && sorted.map((world, idx) => {
           const isActive = world.id === activeWorldId;
           const isRenaming = renamingId === world.id;
           const isDeleting = deletingId === world.id;

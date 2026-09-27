@@ -1,0 +1,224 @@
+    /* ══════════════════════════════════════════════════════════════════
+       World Shelf — launcher skin over the canonical renderer.
+       Everything above this block is the untouched canonical stylesheet;
+       this block only retires the book reading flow, warms the room to
+       Ember's palette, and styles the world card overlay.
+       ══════════════════════════════════════════════════════════════════ */
+
+    /* Warm the room to the launcher's ground so the shelf reads as Ember. */
+    :root {
+      --paper: #12100e;
+      --paper-deep: #0b0a09;
+      --paper-pale: #f4f1ea;
+      --ink: #f4f1ea;
+      --ink-soft: #9c958a;
+      --walnut: #3a2118;
+      --walnut-deep: #1c0e0a;
+      --rule: rgba(244, 241, 234, 0.12);
+      --accent: #ffb224;
+      --ember: #ffb224;
+      --ember-deep: #e38330;
+      --ok: #3ecf8e;
+      --danger: #ff5d55;
+    }
+
+    /* The reading flow — page spreads, "Open book", page navigation — has
+       no equivalent for a card, so its panel stays out of the way. */
+    #detail-panel {
+      display: none !important;
+    }
+
+    /* ── Amber play grammar, shared by both play controls ───────────── */
+    #inspect,
+    #card-overlay-play {
+      background: linear-gradient(180deg, #ffc351, var(--ember) 58%, var(--ember-deep));
+      color: #17120a;
+      border: 1px solid rgba(255, 205, 120, 0.5);
+      border-radius: 999px;
+      font-family: var(--mono);
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      box-shadow:
+        0 1px 0 rgba(255, 226, 170, 0.55) inset,
+        0 6px 18px -8px rgba(255, 178, 36, 0.75);
+      transition: transform var(--dur-micro, 120ms) var(--ease-out),
+        filter var(--dur-micro, 120ms) var(--ease-out);
+    }
+
+    #inspect:hover,
+    #card-overlay-play:hover {
+      filter: brightness(1.07);
+      transform: translateY(-1px);
+    }
+
+    #inspect:active,
+    #card-overlay-play:active {
+      transform: translateY(0);
+      filter: brightness(0.96);
+    }
+
+    #inspect:focus-visible,
+    #card-overlay-play:focus-visible {
+      outline: 2px solid rgba(255, 224, 160, 0.85);
+      outline-offset: 2px;
+    }
+
+    /* ── Selected-card overlay ──────────────────────────────────────── */
+    #card-overlay {
+      position: fixed;
+      /* Above .scene-shell (z-index 3) — the canvas would otherwise swallow
+         every pointer event aimed at the play button. Below .frame (8). */
+      z-index: 6;
+      left: var(--anchor-x, 50%);
+      top: var(--anchor-y, 50%);
+      transform: translate(-50%, calc(-100% - 18px)) scale(var(--card-scale, 1));
+      transform-origin: 50% 100%;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      max-width: min(30rem, 82vw);
+      padding: 12px 14px 12px 16px;
+      border: 1px solid var(--rule);
+      border-radius: 16px;
+      background: rgba(18, 16, 14, 0.72);
+      backdrop-filter: blur(14px) saturate(120%);
+      box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.9);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 240ms var(--ease-out);
+      will-change: left, top, transform;
+    }
+
+    #card-overlay[data-visible="true"] {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    #card-overlay[data-visible="false"] {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #card-overlay .card-overlay__copy {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      min-width: 0;
+    }
+
+    #card-overlay-title {
+      font-family: var(--serif);
+      font-weight: 600;
+      font-size: 1.35rem;
+      line-height: 1.1;
+      letter-spacing: -0.015em;
+      color: var(--ink);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #card-overlay-subtitle {
+      font-size: 0.8125rem;
+      line-height: 1.3;
+      color: var(--ink-soft);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    #card-overlay .card-overlay__status {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      font-family: var(--mono);
+      font-size: 0.6875rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+
+    #card-overlay .card-overlay__dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--faint, #5c564e);
+      box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.04);
+    }
+
+    #card-overlay[data-server="online"] .card-overlay__dot {
+      background: var(--ok);
+      box-shadow: 0 0 0 3px rgba(62, 207, 142, 0.18);
+    }
+
+    #card-overlay[data-server="offline"] .card-overlay__dot {
+      background: var(--danger);
+      box-shadow: 0 0 0 3px rgba(255, 93, 85, 0.18);
+    }
+
+    #card-overlay-play {
+      flex: none;
+      padding: 9px 20px;
+      font-size: 0.8125rem;
+      cursor: pointer;
+    }
+
+    /* ── Active-world badge ─────────────────────────────────────────── */
+    /* Ember's one-flame rule: the Play button already owns the amber, so
+       the active marker stays a quiet warm-white chip. */
+    #card-overlay .card-overlay__active {
+      display: none;
+      margin-top: 2px;
+      align-self: flex-start;
+      padding: 2px 8px;
+      border: 1px solid rgba(244, 241, 234, 0.22);
+      border-radius: 999px;
+      font-family: var(--mono);
+      font-size: 0.5625rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--ink-soft);
+    }
+
+    #card-overlay[data-active="true"] .card-overlay__active {
+      display: inline-block;
+    }
+
+    /* ── Static fallback: the no-WebGL path lists the same worlds ───── */
+    .fallback__list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 10px;
+    }
+
+    .fallback-world {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      padding: 14px 16px;
+      border: 1px solid var(--rule);
+      border-radius: 12px;
+      background: rgba(244, 241, 234, 0.03);
+    }
+
+    .fallback-world strong {
+      font-family: var(--serif);
+      font-size: 1.05rem;
+      font-weight: 600;
+      color: var(--ink);
+    }
+
+    .fallback-world span {
+      font-size: 0.8125rem;
+      color: var(--ink-soft);
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #card-overlay,
+      #inspect,
+      #card-overlay-play {
+        transition: none;
+      }
+    }

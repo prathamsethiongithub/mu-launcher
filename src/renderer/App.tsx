@@ -400,6 +400,7 @@ function App() {
           onSetActive={handleSetActiveWorld}
           onWorldsChanged={loadWorlds}
           onPlayWorld={handlePlayWorld}
+          active={currentView === 'worlds'}
         />
       </div>
       <div className="h-full" style={{ display: currentView === 'settings' ? 'block' : 'none' }}>
