@@ -9,6 +9,7 @@ import { Auth, Xbox, Minecraft } from 'msmc';
 import { SkinService } from './skin-service';
 import type { Account, Session, SkinProfile, IdentityState } from '../shared/types';
 import { normalizeIdentityState } from './identity-state';
+import { RefreshGate } from './refresh-gate';
 
 const IDENTITY_FILE = 'identity.json';
 const TOKENS_FILE = 'identity-tokens.bin';
@@ -94,6 +95,12 @@ export class IdentityService {
   private statePath: string;
   private tokensPath: string;
   private encryptedTokens: Map<string, Session> = new Map();
+  /**
+   * Red-team wave 2 (B5): coalesces concurrent token refreshes and backs off
+   * after a failed one, so a revoked refresh token cannot be hammered into a
+   * rate-limit/lockout storm by the renderer invoking validate-session.
+   */
+  private readonly refreshGate = new RefreshGate();
   private skinService = new SkinService();
 
   constructor() {
@@ -157,6 +164,9 @@ export class IdentityService {
 
     delete this.state.sessions[accountId];
     this.encryptedTokens.delete(accountId);
+    // An explicit sign-out ends the account's refresh cycle: drop any backoff
+    // so a later re-sign-in starts clean.
+    this.refreshGate.reset(accountId);
     this.saveState();
     this.saveTokens();
 
@@ -354,11 +364,15 @@ export class IdentityService {
     // Check expiry (pure decision extracted above; equality = expired)
     const session = this.encryptedTokens.get(accountId);
     if (isSessionExpired(session, Date.now())) {
-      // Try refresh
+      // Try refresh — funnelled through the gate so N concurrent validations
+      // share ONE network attempt, and a failed refresh is not retried until
+      // its cooldown elapses (B5: refresh-storm containment).
       try {
-        await this.refreshMicrosoftSession(accountId);
+        await this.refreshGate.run(accountId, () =>
+          this.refreshMicrosoftSession(accountId),
+        );
         return { valid: true };
-      } catch (err) {
+      } catch {
         return { valid: false, error: 'Session expired. Please sign in again.' };
       }
     }
