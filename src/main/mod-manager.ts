@@ -16,6 +16,7 @@
 
 import { copyFile, mkdir, readdir, rename, stat, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
+import { assertSafeModFilename } from './mod-filename';
 
 export interface ModInfo {
   /** Canonical (enabled-form) filename, e.g. "sodium.jar". */
@@ -37,13 +38,12 @@ function modsDir(worldRootPath: string): string {
 
 /**
  * Every mod API takes a filename that ends up inside a path — so it must be a
- * bare name. This is the traversal guard for the whole module (phase 2 will
- * expose these operations over IPC, where the renderer supplies filenames).
+ * bare name. Delegates to the shared hardened guard (B2): separators, `..`,
+ * control chars, alternate data streams, Windows reserved device names,
+ * trailing dots/spaces and over-long names are all rejected.
  */
 function assertSafeFilename(filename: string, op: string): void {
-  if (!filename || filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
-    throw new Error(`[mods] Unsafe mod filename for ${op}: "${filename}"`);
-  }
+  assertSafeModFilename(filename, { op });
 }
 
 function displayNameOf(filename: string): string {

@@ -16,6 +16,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { mkdir, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
+import { assertSafeModFilename } from './mod-filename';
 
 const MODRINTH_API = 'https://api.modrinth.com/v2';
 /** Modrinth requires a descriptive User-Agent; anonymous requests get throttled. */
@@ -40,11 +41,9 @@ export interface ModUpdateInfo {
   newFilename: string;
 }
 
-/** Path-safe jar filename: no traversal, no separators, must be a .jar. */
+/** Path-safe jar filename: the shared hardened guard plus a .jar requirement. */
 function assertSafeJarFilename(name: string): void {
-  if (!name || /[\\/]/.test(name) || name.includes('..') || !name.toLowerCase().endsWith('.jar')) {
-    throw new Error(`Unsafe mod filename: "${name}"`);
-  }
+  assertSafeModFilename(name, { requireJar: true, op: 'update' });
 }
 
 /**

@@ -18,6 +18,7 @@
 
 import { mkdir, rename, rm } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
+import { assertSafeModFilename } from './mod-filename';
 import { join } from 'node:path';
 
 /** Modrinth asks clients to identify themselves; bare/absent UAs get throttled. */
@@ -40,14 +41,12 @@ interface ModrinthVersion {
   loaders?: string[];
 }
 
-/** Same traversal guard as mod-manager: a remote filename is still a filename. */
+/**
+ * A remote filename is still a filename — same hardened guard as mod-manager
+ * (B2), plus the .jar requirement: a Modrinth download must land as a jar.
+ */
 function assertSafeFilename(filename: string): void {
-  if (!filename || filename.includes('/') || filename.includes('\\') || filename.includes('..')) {
-    throw new Error(`[mods] Unsafe filename from Modrinth: "${filename}"`);
-  }
-  if (!filename.endsWith('.jar')) {
-    throw new Error(`[mods] "${filename}" is not a .jar file — mods must be jars.`);
-  }
+  assertSafeModFilename(filename, { requireJar: true, op: 'download' });
 }
 
 export interface ModrinthSearchResult {
