@@ -1,5 +1,10 @@
 appId: com.mastersunion.ember
+# Default name for any target that does not override artifactName below.
 artifactName: ${productName}-${version}-${arch}.${ext}
+# Ship the app inside an asar archive: the renderer/main bundles become opaque
+# to casual tampering and the install is one file instead of a tree. Electron
+# reads inside asar transparently (its fs shim), so no runtime path changes.
+asar: true
 directories:
   buildResources: build
   output: dist
@@ -7,6 +12,9 @@ files:
 - out/**/*
 - package.json
 nsis:
+  # Distinct from the portable artifact — both targets produce a .exe, so
+  # without this they would collide on the same filename.
+  artifactName: ${productName}-${version}-Setup.${ext}
   allowToChangeInstallationDirectory: true
   # Never delete userData on uninstall — it holds the player's worlds,
   # saves, and accounts. Uninstalling the launcher must not erase them.
@@ -14,6 +22,9 @@ nsis:
   oneClick: false
   perMachine: false
   shortcutName: Ember
+portable:
+  # Single-file, extract-and-run. Some users will not run an installer.
+  artifactName: ${productName}-${version}-Portable.${ext}
 productName: Ember
 publish:
 - owner: prathamsethiongithub
@@ -22,8 +33,10 @@ publish:
   repo: mu-launcher
 # No signing configured — v26 builds unsigned by default and skips the
 # winCodeSign toolchain download entirely (the symlink-extraction failure
-# that killed builds under v25 on machines without Developer Mode).
+# that killed builds under v25 on machines without Developer Mode). Unsigned is
+# the accepted limitation for now and is documented for the user.
 win:
   icon: build/icon.ico
   target:
   - nsis
+  - portable
