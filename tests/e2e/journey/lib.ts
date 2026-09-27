@@ -37,6 +37,18 @@ export interface SlowBody {
 
 export type StreamRule =
   | { match: string; status: number; slow: SlowBody; contentType?: string }
+  /** A fast, exact-size BINARY body (no JSON envelope) — for canned jars
+   *  where the byte count is the contract (e.g. a resumed download). */
+  | { match: string; status: number; bytes: number; contentType?: string }
+  /** Never settles, and deliberately IGNORES the abort signal — a caller
+   *  with a timeout (timedFetch) cannot time out a promise that never
+   *  rejects. Used to pin an in-flight pipeline open with ZERO egress: the
+   *  launch pipeline's first await is ensureFabric's timedFetch, so a hang
+   *  here holds `launchInProgress` true for the whole observation window. */
+  | { match: string; status: number; hang: true }
+  /** Fails immediately with no egress — lets a pipeline settle on its own
+   *  typed error instead of hanging on a real download. */
+  | { match: string; status: number; reject: true }
   | { match: string; status: number; body: unknown; contentType?: string };
 
 /** Inject into the MAIN process: intercept the given URL substrings and
@@ -64,6 +76,24 @@ export async function patchMainNetworkStream(
               : input.url;
         for (const rule of cfg) {
           if (!url.includes(rule.match)) continue;
+          if ('reject' in rule) {
+            // Fail fast, no egress: the caller sees a network error and can
+            // settle on its own typed [E4xx]/[E3xx] verdict.
+            throw new Error(`[e2e] network rejected: ${url}`);
+          }
+          if ('hang' in rule) {
+            // A promise that never settles AND ignores the abort signal, so
+            // a timeout-wrapped caller still hangs. No bytes ever leave.
+            return new Promise<Response>(() => { /* pending forever */ });
+          }
+          if ('bytes' in rule) {
+            const payload = new Uint8Array(rule.bytes);
+            for (let i = 0; i < payload.length; i++) payload[i] = i & 0xff;
+            return new Response(payload, {
+              status: rule.status,
+              headers: { 'content-type': rule.contentType ?? 'application/octet-stream' },
+            });
+          }
           if ('slow' in rule) {
             // Headers now; body drips in over slow.intervalMs * chunks.
             const total = rule.slow.chunks * rule.slow.chunkBytes;

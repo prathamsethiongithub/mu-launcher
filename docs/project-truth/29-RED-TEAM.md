@@ -106,9 +106,9 @@ Electron lifecycle, build-time feed resolution and repo-wide sink absence cannot
 
 **Unit suite: 302 → 355, all passing. Typecheck clean. Committed E2E: 8/8 pass on the changed surfaces** (`oracle-recovery` × 4, `identity-library` × 1, `smoke-core` × 4 — 32 s).
 
-### Known, pre-existing flakiness (NOT a regression)
+### Known, pre-existing flakiness (NOT a regression) — **RESOLVED**
 
-`tests/e2e/redteam-assault.spec.ts` (new, untracked, from the prior wave) has 4 failures in this environment: A1, A2, A4, C1. A1/A2 were re-run against a `git stash`-reverted worktree with **unmodified HEAD sources** and failed **identically** (`waitForText('Ready.')` false; 120 s timeout). They are renderer-readiness/timing failures under load, independent of this wave's main-process changes, and were left **unmodified** so the wave keeps a clean, honest diff. A4's failure is also not attributable to the filename fix — the canned response filename is `journey-mod.jar`, which the new guard accepts.
+`tests/e2e/redteam-assault.spec.ts` (new, untracked, from the prior wave) has 4 failures in this environment: A1, A2, A4, C1. A1/A2 were re-run against a `git stash`-reverted worktree with **unmodified HEAD sources** and failed **identically** (`waitForText('Ready.')` false; 120 s timeout). They are renderer-readiness/timing failures under load, independent of this wave's main-process changes, and were left **unmodified** so the wave keeps a clean, honest diff. **(Superseded: all four were later diagnosed and fixed at the test layer — see §7.)** A4's failure is also not attributable to the filename fix — the canned response filename is `journey-mod.jar`, which the new guard accepts.
 
 ---
 
@@ -142,3 +142,59 @@ npx vitest run tests/redteam-wave2.test.ts --reporter=verbose
 | `src/main/update-checker.ts` | delegate to shared filename guard (`.jar` required) |
 | `src/main/identity-service.ts` | route `refreshMicrosoftSession` through the gate; reset on sign-out |
 | `tests/redteam-wave2.test.ts` | **new** — 53 regression + live-fire tests |
+| `tests/e2e/redteam-assault.spec.ts` | **new** — 6 live whole-app assaults (A1/A2/A5b/A4/C3/C1); verdicts below |
+
+---
+
+## 7. Wave 1 & 3 — live assault suite (`redteam-assault.spec.ts`)
+
+The A/C series is the live, whole-app counterpart to the nine unit-level attacks. Six
+assaults: A1 Play-spam, A2 navigation storm, A5b bridge-level custody refusal, A4
+graceful close mid-download, C3 SIGKILL inside the splash window, C1 early-IPC strike.
+Every boot runs on a throwaway `--user-data-dir`; the real profile is never touched.
+
+**Verdict: 6/6 PASS, deterministic** — two consecutive full-file runs, 1.0 min each.
+
+| # | Assault | Verdict | Live evidence |
+|---|---|---|---|
+| A1 | Play ×10 @1Hz | **HELD** | one pipeline pinned in-flight; `[REDTEAM][A1] verdicts: E604=10 other=0` — every shot refused by the guard, never a second pipeline, never a crash |
+| A2 | nav storm @100ms ×30s | **HELD** | `switches=251–252 consoleErrors=0 unhandledRejections=0` — 250+ view switches incl. Ctrl+L/Ctrl+K, zero console errors, zero unhandled rejections |
+| A5b | renderer-crafted `settingsPath` | **HELD** | `success=false error="Invalid settings folder. Pick it again with the folder chooser."` — refused at the IPC boundary, nothing copied |
+| A4 | `window.close` mid-download | **HELD** | graceful exit mid-stream leaves only a `.tmp` (no full jar); next boot is honest and the retry writes exactly one jar of the expected size — no fake mod |
+| C3 | SIGKILL during splash | **HELD** | next boot on the same profile reaches `Ready.`, account registry intact |
+| C1 | IPC barrage 500 ms after boot | **HELD** | `5/5 answered` — every early call resolves; empty-name `createWorld` creates nothing; registry stays loadable |
+
+### The four prior failures were TEST defects, not defence failures
+
+The suite was written a wave earlier and left failing (see §4). All four causes are at
+the **test layer** — no production behaviour was weakened to make them pass:
+
+1. **A1 & C1 hung on a REAL launch.** `launchGame()` was called with no `javaPath`;
+   `"undefined"` passes `SAFE_PATH_REGEX`, so `validatePath` let it through and a real
+   JRE + Fabric + version download ran, blowing the 120 s timeout. Fix: A1 *occupies*
+   the pipeline with **zero egress** — a new `hang` fetch rule
+   (`tests/e2e/journey/lib.ts`) pins `ensureFabric`'s `timedFetch` open forever, and the
+   arm signal is the first `launch-step` event, which is emitted strictly *after*
+   `launchInProgress = true` (so proving the guard cannot itself become the hung call).
+   C1 instead uses a `reject` rule so the pipeline settles on its typed error and every
+   early call **answers**.
+2. **A2 asserted on the wrong screen.** The storm is position-dependent (it ends on
+   whatever phase the 6-step sequence lands on, and Ctrl+L toggles Console↔Play), and
+   `clickNav` matched the **world card's** Play button rather than the dock nav. The
+   storm itself was always clean. Fix: dock-scope `clickNav` to `nav button`, and return
+   to Play before the liveness check.
+3. **A4's retry was canned with no body.** `MODRINTH_CANNED.jar` carries no `body`, so
+   the retry saw an empty response and the downloader correctly rejected it
+   (`empty response body`, `mod-downloader.ts` requires a reader). Fix: a new `bytes`
+   rule serves a fast, exact-size payload.
+
+### Reproduce
+
+```bash
+npm run build
+npx playwright test tests/e2e/redteam-assault.spec.ts
+```
+
+Green gates after the fix: `typecheck` clean, `npm test` 374/374, `build` clean,
+assault suite 6/6 (×2), and 11/11 across `smoke-core` / `first-boot-note` /
+`identity-library` / `oracle-recovery`.
