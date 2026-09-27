@@ -40,6 +40,12 @@ import { createHash } from 'node:crypto';
 import { createWriteStream } from 'node:fs';
 import { dirname, isAbsolute, join } from 'node:path';
 import { downloadGuard, readWithStallGuard, pMap } from './net';
+import {
+  assertArchiveBudget,
+  assertArchiveSize,
+  assertEntryBudget,
+  type ZipEntryLike,
+} from './archive-guard';
 
 /** Modrinth asks clients to identify themselves; bare/absent UAs get throttled. */
 const USER_AGENT = 'mu-master-launcher/1.0.0 (github.com/prathamsethiongithub/mu-launcher)';
@@ -84,15 +90,20 @@ async function readModpackIndex(archive: Buffer): Promise<MrpackIndex> {
   ) => { getEntries(): ZipEntry[] };
   let indexText: string;
   try {
+    // Bomb containment (B6): bound the archive on disk and the whole central
+    // directory BEFORE any getData() allocates a declared-size buffer.
+    assertArchiveSize(archive.length);
     const zip = new AdmZipCtor(archive);
-    const entry = zip
-      .getEntries()
+    const allEntries = zip.getEntries();
+    assertArchiveBudget(allEntries);
+    const entry = allEntries
       .find((e) => e.entryName === 'modrinth.index.json' && !e.isDirectory);
     if (!entry) {
       throw new Error(
         '[E701] The modpack archive has no modrinth.index.json — not a Modrinth modpack.',
       );
     }
+    assertEntryBudget(entry, 'manifest');
     indexText = entry.getData().toString('utf8');
   } catch (err) {
     if (err instanceof Error && err.message.includes('[E701]')) throw err;
@@ -114,7 +125,7 @@ async function readModpackIndex(archive: Buffer): Promise<MrpackIndex> {
 const OVERRIDES_PREFIX = 'overrides/';
 
 /** Minimal shape of an adm-zip entry (mirrors the local type shim). */
-interface ZipEntry {
+interface ZipEntry extends ZipEntryLike {
   entryName: string;
   isDirectory: boolean;
   getData(): Buffer;
@@ -136,6 +147,14 @@ export async function installModpackOverrides(
   if (!zipPath) throw new Error('[modpack] No modpack archive path provided.');
   if (!worldRootPath) throw new Error('[modpack] No world root path provided.');
 
+  // Refuse an oversized file BEFORE readFile pulls it into memory.
+  try {
+    assertArchiveSize((await stat(zipPath)).size);
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('[E705]')) throw err;
+    // stat failure (missing file) falls through to readFile's precise ENOENT.
+  }
+
   // Read the archive ourselves — see the Buffer note in the header. Doing it
   // with fs/promises also turns a missing file into a precise ENOENT message
   // instead of adm-zip's generic INVALID_FILENAME.
@@ -147,6 +166,10 @@ export async function installModpackOverrides(
       `[modpack] Could not read modpack archive at ${zipPath}: ${(err as Error).message}`,
     );
   }
+
+  // Bomb containment (B6): refuse oversized archives and lying central
+  // directories before adm-zip can Buffer.alloc() a declared-size entry.
+  assertArchiveSize(archive.length);
 
   // Buffer constructor via cast — see the header note about the local shim.
   const AdmZipCtor = (await import('adm-zip')).default as unknown as new (
@@ -161,9 +184,11 @@ export async function installModpackOverrides(
     );
   }
 
-  const overrides = zip
-    .getEntries()
-    .filter((entry) => entry.entryName.startsWith(OVERRIDES_PREFIX));
+  const allEntries = zip.getEntries();
+  assertArchiveBudget(allEntries);
+  const overrides = allEntries.filter((entry) =>
+    entry.entryName.startsWith(OVERRIDES_PREFIX),
+  );
 
   if (overrides.length === 0) {
     throw new Error(
@@ -197,6 +222,7 @@ export async function installModpackOverrides(
       continue;
     }
 
+    assertEntryBudget(entry, 'override');
     await mkdir(dirname(target), { recursive: true });
     try {
       await writeFile(target, entry.getData());
@@ -348,6 +374,11 @@ export async function installModpackFiles(
   zipPath: string,
   worldRootPath: string,
 ): Promise<{ installed: number; skipped: number; failed: number; errors: string[] }> {
+  try {
+    assertArchiveSize((await stat(zipPath)).size);
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('[E705]')) throw err;
+  }
   let archive: Buffer;
   try {
     archive = await readFile(zipPath);
@@ -356,6 +387,7 @@ export async function installModpackFiles(
       `[E701] Could not read modpack archive at ${zipPath}: ${(err as Error).message}`,
     );
   }
+  assertArchiveSize(archive.length);
   const index = await readModpackIndex(archive);
   const items = Array.isArray(index.files) ? index.files : [];
 
