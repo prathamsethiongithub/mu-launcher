@@ -52,3 +52,6 @@ identity.json
 identity-tokens.bin
 auth-session.bin
 test-results/
+build/
+out/
+node_modules/
